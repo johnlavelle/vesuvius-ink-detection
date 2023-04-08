@@ -1,25 +1,25 @@
 import datetime
 import pprint
-import time
+from timeit import default_timer as timer
+from itertools import islice
 from dataclasses import dataclass
-from typing import Tuple, Any
+from typing import Any, Generator
 
 import dask
 import numpy as np
 import torch
 import torch.nn as nn
 import torch.optim as optim
-from torch.utils.data import DataLoader
 from torch.utils.tensorboard import SummaryWriter
 from tqdm import tqdm
 from xarray import DataArray
+import multiprocessing as mp
 
 from vesuvius.config import Configuration, read_config, save_config
-from vesuvius.data_io import read_dataset_from_zarr
-from vesuvius.dataloader import data_loader
-from vesuvius.dataset import BaseDataset
+from vesuvius.dataloader import get_train_loader, get_test_loader
+from vesuvius.scroll_dataset import BaseDataset
 from vesuvius.sampler import CropBoxSobol
-from vesuvius.train_utils import TrackerAvg
+from vesuvius.data_utils import TrackerAvg, Datapoint
 
 
 pp = pprint.PrettyPrinter(indent=4)
@@ -36,41 +36,22 @@ EPOCHS = 1
 CACHED_DATA = True
 FORCE_CACHE_REST = False  # Deletes cache. Only used if CACHED_DATA is True.
 RESET_CACHE_EPOCH_INTERVAL = 10
-SAVE_MODEL_INTERVAL = 1_00_000
+SAVE_MODEL_INTERVAL = 100_000
+TEST_MODEL = True
 
 
-# Create samples
-# No affect if CACHED_DATA is True
+class SampleXYZ(BaseDataset):
 
-class SubVolumeDatasets(BaseDataset):
-
-    def get_item_as_data_array(self, index: int) -> Tuple[DataArray, DataArray]:
-        assert isinstance(index, int)
-        assert index >= 0
-        if index >= self.max_iterations:
-            raise StopIteration
+    def get_item_as_data_array(self, index: int) -> Datapoint:
         rnd_slice = self.get_slice(index)
-        ink_labs = self.ds.labels.sel(**rnd_slice).transpose('x', 'y')
+        slice_xy = {key: value for key, value in rnd_slice.items() if key in ('x', 'y')}
+        label = self.ds.labels.sel(**slice_xy).transpose('x', 'y')
         voxels = self.ds.images.sel(**rnd_slice).transpose('z', 'x', 'y')
-        voxels = self.normalise_voxels(voxels)
-        return self.postprocess_data_array(voxels, ink_labs)
-
-
-class SubVolumeDatasets2(BaseDataset):
-
-    def get_item_as_data_array(self, index: int) -> Tuple[DataArray, DataArray]:
-        assert isinstance(index, int)
-        assert index >= 0
-        if index >= self.max_iterations:
-            raise StopIteration
-        rnd_slice = self.get_slice(index)
-        xy_slice = {'x': slice(rnd_slice['x'].start, rnd_slice['x'].stop, 1),
-                    'y': slice(rnd_slice['y'].start, rnd_slice['y'].stop, 1)}
-        z_slice = {'z': slice(self.ds['z'][0], self.ds['z'][-1], 5)}
-        ink_labs = self.ds.labels.sel(**xy_slice).transpose('x', 'y')
-        voxels = self.ds.images.sel(**xy_slice).sel(**z_slice).transpose('z', 'x', 'y')
-        voxels = self.normalise_voxels(voxels)
-        return self.postprocess_data_array(voxels, ink_labs)
+        # voxels = self.normalise_voxels(voxels)
+        s = rnd_slice
+        dp = Datapoint(voxels, label, self.ds.fragment,
+                       s['x'].start, s['x'].stop, s['y'].start, s['y'].stop, s['z'].start, s['z'].stop)
+        return dp
 
 
 # Label processors
@@ -150,71 +131,56 @@ else:
     print('Getting config from Configuration instantiation...\n')
     config = Configuration(info="Sampling every 5th layer",
                            model=cnn1_sequential,
-                           volume_dataset_cls=SubVolumeDatasets2,
+                           volume_dataset_cls=SampleXYZ,
                            crop_box_cls=CropBoxSobol,
                            label_fn=centre_pixel,
-                           collate_fn=None,
-                           training_steps=10_000,  # If caching, this should be small enough to fit on disk
+                           training_steps=1_000,  # If caching, this should be small enough to fit on disk
                            batch_size=32,
                            fragments=[1, 2, 3],
-                           box_width_sample=61,
                            prefix='/data/kaggle/vesuvius/train/',
                            test_box=(XL, YL, XL + WIDTH, YL + HEIGHT),  # Hold back rectangle
                            test_box_fragment=1,  # Hold back fragment
-                           z_limit=(0, 64 - 13),
+                           box_width_xy=61,
+                           box_width_z=10,
                            balance_ink=True,
-                           num_workers=5)
+                           num_workers=min(1, mp.cpu_count() - 1),
+                           collate_fn=None)
 
 model = config.model().to(DEVICE)
 
 
-# rnd_vals = torch.randn(config.batch_size,
-#                        1,
-#                        config.z_limit[1] - config.z_limit[0] + 1,
-#                        config.box_width_sample,
-#                        config.box_width_sample).to(DEVICE)
-# ma = model.forward(rnd_vals)
-
 # Training
 
-def save_model_and_config(configuration: dataclass, torch_model: Any, prefix: str = ''):
+
+def save_model_and_config(cfg: dataclass, torch_model: Any, prefix: str = ''):
     now = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
     torch.save(torch_model.state_dict(), f"output/save_model/{prefix}_model_{now}.pt")
-    save_config(configuration, f"output/save_model/{prefix}_config_{now}.json")
+    save_config(cfg, f"output/save_model/{prefix}_config_{now}.json")
 
 
-def train_loaders():
+def train_loaders() -> Generator[Datapoint, None, None]:
     for epoch in range(EPOCHS):
         reset_cache = CACHED_DATA and (epoch != 0 and epoch % RESET_CACHE_EPOCH_INTERVAL == 0)
         reset_cache = reset_cache or (epoch == 0 and FORCE_CACHE_REST)
-        yield from data_loader(config, cached=CACHED_DATA, reset_cache=reset_cache)
-
-
-def get_test_loader():
-    """Hold back data test box for fragment 1"""
-    ds_test = read_dataset_from_zarr(config.test_box_fragment, config.num_workers, config.prefix)
-    ds_test = ds_test.isel(x=slice(config.test_box[0], config.test_box[2]),
-                           y=slice(config.test_box[1], config.test_box[3]),
-                           z=slice(*config.z_limit))
-    ds_test.load()
-    ds_test['full_mask'] = ds_test['mask']
-    test_dataset = config.volume_dataset_cls(ds_test,
-                                             config.box_width_sample,
-                                             1_000_000,
-                                             crop_box_cls=CropBoxSobol,
-                                             label_operation=config.label_fn,
-                                             balance_ink=False)
-    return DataLoader(test_dataset, batch_size=config.batch_size, shuffle=False, num_workers=config.num_workers)
+        yield from get_train_loader(config, cached=CACHED_DATA, reset_cache=reset_cache)
 
 
 if __name__ == '__main__':
-    # print(f'Shape of sample batches: {rnd_vals.shape}', '\n')
 
     print(model, '\n')
     pp.pprint(config)
     print('\n')
 
-    test_loader = get_test_loader()
+    if TEST_MODEL:
+        rnd_vals = torch.randn(config.batch_size,
+                               1,
+                               config.box_width_z,
+                               config.box_width_xy,
+                               config.box_width_xy).to(DEVICE)
+        print(f'Shape of sample batches: {rnd_vals.shape}', '\n')
+        ma = model.forward(rnd_vals)
+
+    test_loader = get_test_loader(config)
 
     # Train
 
@@ -233,50 +199,50 @@ if __name__ == '__main__':
     lr_track = TrackerAvg('stats/lr', writer)
 
     model.train()
-    time_start = time.time()
+    time_start = timer()
     tqdm_kwargs = dict(total=total, disable=False, desc='Training', position=0)
-    for i, (sub_volumes, ink_labels) in tqdm(enumerate(train_loaders()), **tqdm_kwargs):
+    i = None
+    for i, datapoint in tqdm(enumerate(train_loaders()), **tqdm_kwargs):
         if i >= total:
             break
-
         optimizer.zero_grad()
-        outputs = model(sub_volumes.to(DEVICE))
-        loss = criterion(outputs, ink_labels.to(DEVICE))
+        outputs = model(datapoint.voxels.to(DEVICE))
+        loss = criterion(outputs, datapoint.label.to(DEVICE))
         loss.backward()
         optimizer.step()
         scheduler.step()
 
-        train_loss.update(loss.item(), len(sub_volumes))
+        train_loss.update(loss.item(), len(datapoint.voxels))
         lr_track.update(scheduler.get_last_lr()[0], 1)
 
-        if i != 0 and i % 100 == 0:
-            with torch.no_grad():
-                model.eval()
-                cur_learning_rate = scheduler.get_last_lr()[0]
-                for iv, (sub_volumes_val, ink_labels_val) in enumerate(test_loader):
-                    if iv >= 2:
-                        break
-                    with torch.no_grad():
-                        outputs = model(sub_volumes_val.to(DEVICE))
-                        val_loss = criterion(outputs, ink_labels_val.to(DEVICE))
+        if i == 0:
+            continue
 
-                        test_loss.update(val_loss.item(), len(sub_volumes_val))
-
-            train_loss.log(i)
-            lr_track.log(i)
-            test_loss.log(i)
-
-        if i != 0 and i % SAVE_MODEL_INTERVAL == 0:
+        if i % SAVE_MODEL_INTERVAL == 0:
             save_model_and_config(config, model, prefix='intermediate')
 
+        if not i % 100 == 0:
+            continue
+
+        model.eval()
+        with torch.no_grad():
+            for iv, datapoint_test in enumerate(islice(test_loader, 5)):
+                outputs = model(datapoint_test.voxels.to(DEVICE))
+                val_loss = criterion(outputs, datapoint_test.label.to(DEVICE))
+                test_loss.update(val_loss.item(), len(datapoint_test.voxels))
+
+        train_loss.log(i)
+        lr_track.log(i)
+        test_loss.log(i)
         model.train()
 
     else:
-        print("Stopping training early. Try clearing the cache "
-              "(with FORCE_CACHE_REST = True) and restarting the training.")
+        if i < total - 1:
+            print("Training stopped early. Try clearing the cache "
+                  "(with FORCE_CACHE_REST = True) and restart the training.")
 
     save_model_and_config(config, model)
     writer.flush()
-    time_end = time.time()
+    time_end = timer()
     time_spent = time_end - time_start
     print(f"Training took {time_spent:.1f} seconds")

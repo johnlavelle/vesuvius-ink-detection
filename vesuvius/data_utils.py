@@ -1,7 +1,7 @@
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
+from collections import namedtuple
 from torch.utils.tensorboard import SummaryWriter
-from dataclasses import dataclass
 
 
 @dataclass
@@ -32,3 +32,6 @@ class TrackerAvg(BaseTracker):
         self.summary_writer.add_scalar(self.tag, avg, iteration)
         self.value = 0.0
         self.i = 0
+
+
+Datapoint = namedtuple("Datapoint", "voxels label fragment x_start x_stop y_start y_stop z_start z_stop")

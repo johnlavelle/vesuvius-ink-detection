@@ -46,10 +46,10 @@ def dataset_to_zarr(dataset: xr.Dataset, zarr_path: str, append_dim: str) -> Non
     if os.path.exists(zarr_path):
         mode, append_dim, encodings_ = 'a', append_dim, None
     else:
-        mode, append_dim, encodings_ = 'w-', None, encodings(['samples', 'labels'])
+        mode, append_dim, encodings_ = 'w-', None, encodings(['voxels', 'label'])
 
-    dataset['samples'] = dataset['samples'].chunk(dataset['samples'].shape)
-    dataset['labels'] = dataset['labels'].chunk(dataset['labels'].shape)
+    dataset['voxels'] = dataset['voxels'].chunk(dataset['voxels'].shape)
+    dataset['label'] = dataset['label'].chunk(dataset['label'].shape)
     dataset.to_zarr(zarr_path, mode=mode, encoding=encodings_, consolidated=True, compute=True, append_dim=append_dim)
 
 

@@ -1,7 +1,7 @@
 from typing import Tuple, Iterator, Callable, Optional
 
 import numpy as np
-from xarray import DataArray
+import xarray as xr
 from scipy.stats import qmc
 
 try:
@@ -10,41 +10,52 @@ except ImportError:
     from typing_extensions import Protocol
 
 
-class CropBoxInter(Protocol):
+class CropBoxIter(Protocol):
     total_bounds: Tuple[int, int, int, int]
     sample_box_width: int
     seed: int
 
-    def __iter__(self) -> Iterator[Tuple[int, int, int, int]]:
+    def __iter__(self) -> Iterator[Tuple[int, int, int, int, int, int]]:
         ...
 
-    def __next__(self) -> Tuple[int, int, int, int]:
+    def __next__(self) -> Tuple[int, int, int, int, int, int]:
         ...
 
 
-class CropBoxSobol(CropBoxInter):
+class CropBoxSobol(CropBoxIter):
 
-    def __init__(self, total_bounds: Tuple[int, int, int, int], sample_box_width: int, seed: int):
+    def __init__(
+            self,
+            total_bounds: Tuple[int, int, int, int, int, int],
+            width_xy: int,
+            width_z: int,
+            seed: int = 42,
+    ):
         """
         :param total_bounds:
-        :param sample_box_width:
+        :param width_xy:
+        :param width_z:
         """
         self.bounds = total_bounds
-        self.box_width = sample_box_width
+        self.width_xy = width_xy
+        self.width_z = width_z
+        self.sampler = qmc.Sobol(d=3, scramble=True, optimization=None, seed=seed)
+        self.l_bounds = np.array([self.bounds[0],
+                                  self.bounds[1],
+                                  self.bounds[2]])
+        self.u_bounds = np.array([self.bounds[3] - (self.width_xy - 2),
+                                  self.bounds[4] - (self.width_xy - 2),
+                                  self.bounds[5] - (self.width_z - 2)])
 
-        self.sampler = qmc.Sobol(d=2, scramble=True, optimization=None, seed=seed)
-        self.l_bounds = np.array([self.bounds[0], self.bounds[1]])
-        self.u_bounds = np.array([self.bounds[2] - sample_box_width, self.bounds[3] - sample_box_width])
+    def sobol_sample(self) -> Tuple[int, int, int]:
+        return tuple(self.sampler.integers(l_bounds=self.l_bounds, u_bounds=self.u_bounds)[0])
 
-    def sobol_sample(self) -> Tuple[int, int]:
-        return self.sampler.integers(l_bounds=self.l_bounds, u_bounds=self.u_bounds)[0]
-
-    def __iter__(self) -> Iterator[Tuple[int, int, int, int]]:
+    def __iter__(self) -> Iterator[Tuple[int, int, int, int, int, int]]:
         return self
 
-    def __next__(self) -> Tuple[int, int, int, int]:
-        x, y = self.sobol_sample()
-        return x, x + self.box_width - 1, y, y + self.box_width - 1
+    def __next__(self) -> Tuple[int, int, int, int, int, int]:
+        x, y, z = self.sobol_sample()
+        return x, x + self.width_xy - 1, y, y + self.width_xy - 1, z, z + self.width_z - 1
 
 
 # class CropBoxRegular(CropBoxProtocol):
@@ -74,42 +85,48 @@ class CropBoxSobol(CropBoxInter):
 class VolumeSampler:
 
     def __init__(self,
-                 mask_array: DataArray,
-                 labels_array: DataArray,
+                 dataset: xr.Dataset,
                  box_width: int,
+                 z_width: int,
                  samples: int = None,
                  balance=True,
-                 crop_box_cls: Callable[[Tuple[int, int, int, int], int, Optional[int]], CropBoxInter] = CropBoxSobol,
+                 crop_cls: Callable[
+                     [Tuple[int, int, int, int, int, int], int, int, Optional[int]], CropBoxIter] = CropBoxSobol,
                  seed=42):
 
-        self.mask_array = mask_array
-        self.labels_array = labels_array
+        self.ds = dataset
+        self.mask_array = self.ds.mask
+        self.labels_array = self.ds.labels
         self.box_width = box_width
+        self.z_width = z_width
         self.balance_ink = balance
         self.total_ink_pixels = 0
         self.total_pixels = 0
-        x_lower = self.mask_array.coords['x'][0].item()
-        x_upper = self.mask_array.coords['x'][-1].item()
-        y_lower = self.mask_array.coords['y'][0].item()
-        y_upper = self.mask_array.coords['y'][-1].item()
-        bounds = (x_lower, y_lower, x_upper, y_upper)
-        self.crop_box = crop_box_cls(bounds, box_width, seed)
+        x_lower = self.ds.coords['x'][0].item()
+        x_upper = self.ds.coords['x'][-1].item()
+        y_lower = self.ds.coords['y'][0].item()
+        y_upper = self.ds.coords['y'][-1].item()
+        z_lower = self.ds.coords['z'][0].item()
+        z_upper = self.ds.coords['z'][-1].item()
+        bounds = (x_lower, y_lower, z_lower, x_upper, y_upper, z_upper)
+        self.crop_box = crop_cls(bounds, self.box_width, self.z_width, seed)
         self.samples = samples
         self.running_samples = 0
 
     def get_slice(self, counter=0, max_recursions=50, balance_ink_override=True):
         # Get a random crop box
-        x_lower, x_upper, y_lower, y_upper = next(self.crop_box)
+        x_lower, x_upper, y_lower, y_upper, z_lower, z_upper = next(self.crop_box)
         # bound extents to slice
-        slice_ = dict(x=slice(x_lower, x_upper), y=slice(y_lower, y_upper))
+        slice_ = dict(x=slice(x_lower, x_upper), y=slice(y_lower, y_upper), z=slice(z_lower, z_upper))
         try:
-            mask_array = self.mask_array.sel(**slice_)
+            slice_xy = {key: value for key, value in slice_.items() if key in ('x', 'y')}
+            mask_array = self.mask_array.sel(**slice_xy)
             assert mask_array.all(), "Cropped box contains masked pixels."
             assert mask_array.shape == (self.box_width, self.box_width)
 
-            # # Reduce the number of non-ink pixels in the dataset if unbalanced,
-            # # by only returning slices that contain ink.
-            sub_labels = self.labels_array.sel(**slice_)
+            # Reduce the number of non-ink pixels in the dataset if unbalanced,
+            # by only returning slices that contain ink.
+            sub_labels = self.labels_array.sel(**slice_xy)
             count_ink_pixels = int(sub_labels.sum())
             count_pixels = int(sub_labels.size)
             if self.balance_ink and balance_ink_override:

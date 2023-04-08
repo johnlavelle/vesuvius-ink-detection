@@ -46,7 +46,7 @@ def vectorise_raster(raster: np.ndarray) -> Polygon:
     return Polygon(contour)
 
 
-def get_mask(dataset: xr.Dataset, test_box_coords: Tuple[int, int, int, int]) -> DataArray:
+def get_hold_back_mask(dataset: xr.Dataset, test_box_coords: Tuple[int, int, int, int]) -> DataArray:
     test_filter = ~((dataset.x >= test_box_coords[0]) &
                     (dataset.x <= test_box_coords[0] + 700) &
                     (dataset.y >= test_box_coords[1]) &

@@ -3,7 +3,7 @@ import multiprocessing as mp
 from dataclasses import dataclass, asdict
 from typing import Union, Optional, Callable, List, Tuple, Any
 
-from .sampler import CropBoxInter
+from .sampler import CropBoxIter
 
 
 @dataclass
@@ -11,16 +11,16 @@ class Configuration:
     info: str
     model: Callable
     volume_dataset_cls: Callable
-    crop_box_cls: CropBoxInter
+    crop_box_cls: CropBoxIter
     label_fn: Callable
     training_steps: int
     batch_size: int
     fragments: Union[List[int], Tuple[int]]
-    box_width_sample: int
     prefix: str
     test_box: Tuple[int, int, int, int]
-    test_box_fragment: int
-    z_limit: Tuple[int, int]
+    test_box_fragment: int = 1
+    box_width_xy: int = 61
+    box_width_z: int = 65
     balance_ink: bool = True
     num_workers: int = min(1, mp.cpu_count() - 1)
     collate_fn: Optional[Union[Callable, None]] = None
