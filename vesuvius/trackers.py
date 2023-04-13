@@ -1,6 +1,6 @@
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
-from collections import namedtuple
+
 from torch.utils.tensorboard import SummaryWriter
 
 
@@ -27,11 +27,15 @@ class TrackerAvg(BaseTracker):
         self.value += loss * batch_size
         self.i += batch_size
 
+    @property
+    def average_loss(self) -> float:
+        try:
+            return self.value / self.i
+        except ZeroDivisionError:
+            return 0.0
+
     def log(self, iteration: int) -> None:
-        avg = self.value / self.i
-        self.summary_writer.add_scalar(self.tag, avg, iteration)
-        self.value = 0.0
-        self.i = 0
-
-
-Datapoint = namedtuple("Datapoint", "voxels label fragment x_start x_stop y_start y_stop z_start z_stop")
+        try:
+            self.summary_writer.add_scalar(self.tag,  self.average_loss, iteration)
+        except ZeroDivisionError:
+            pass

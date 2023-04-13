@@ -1,6 +1,9 @@
 from typing import Tuple
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
+
+import pandas as pd
+from shapely import Polygon, Point
 from torch.utils.tensorboard import SummaryWriter
 
 import numpy as np
@@ -26,6 +29,14 @@ def normalise_images(dataset: Dataset) -> Dataset:
     # dataset['images'].attrs['std'] = ds_std.item()
 
     return dataset
+
+
+def normalise_voxels(voxels) -> DataArray:
+    voxels_mean_z = voxels.mean(dim=['x', 'y'], skipna=True)
+    voxels_std_z = voxels.std(dim=['x', 'y'], skipna=True)
+    eps = 1e-6  # set a small non-zero value
+    voxels_std_z = voxels_std_z.where(voxels_std_z != 0, eps)
+    return (voxels - voxels_mean_z) / voxels_std_z
 
 
 def coords_to_poly(coords: Tuple[int, int, int, int]) -> Polygon:
@@ -54,17 +65,9 @@ def get_hold_back_mask(dataset: xr.Dataset, test_box_coords: Tuple[int, int, int
     return dataset['mask'].where(test_filter, drop=False, other=False)
 
 
-@dataclass
-class BaseTracker(ABC):
-    tag: str
-    summary_writer: SummaryWriter = field(default_factory=SummaryWriter)
-    value: float = 0.0
-    i: int = 0
-
-    @abstractmethod
-    def update(self, loss: float, batch_size: int) -> None:
-        ...
-
-    @abstractmethod
-    def log(self, iteration: int) -> None:
-        ...
+def check_points_in_polygon(points, polygon_coords):
+    polygon = Polygon(polygon_coords)
+    points_df = pd.DataFrame(points, columns=['x', 'y'])
+    points_df['geometry'] = points_df.apply(lambda row: Point(row['x'], row['y']), axis=1)
+    points_df['inside_polygon'] = points_df['geometry'].apply(lambda point: point.within(polygon))
+    return points_df

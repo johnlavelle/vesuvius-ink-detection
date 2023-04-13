@@ -1,31 +1,38 @@
-import json
 import multiprocessing as mp
-from dataclasses import dataclass, asdict
-from typing import Union, Optional, Callable, List, Tuple, Any
+from torch.nn import Module
+from dataclasses import dataclass, field
+from typing import Union, Optional, Callable, List, Tuple, Any, Type
 
-from .sampler import CropBoxIter
+from .sampler import BaseCropBox, BaseVolumeSampler
 
 
 @dataclass
 class Configuration:
     info: str
-    model: Callable
-    volume_dataset_cls: Callable
-    crop_box_cls: CropBoxIter
+    model: Module
+    volume_dataset_cls: Type[BaseVolumeSampler]
+    crop_box_cls: Type[BaseCropBox]
     label_fn: Callable
     training_steps: int
     batch_size: int
     fragments: Union[List[int], Tuple[int]]
-    prefix: str
+
     test_box: Tuple[int, int, int, int]
     test_box_fragment: int = 1
     box_width_xy: int = 61
     box_width_z: int = 65
+    stride_xy: int = None
+    stride_z: int = None
     balance_ink: bool = True
+    shuffle: bool = True
+    group_pixels: bool = False
     num_workers: int = min(1, mp.cpu_count() - 1)
+    prefix: str = field(default_factory=lambda: "")
+    suffix_cache: str = field(default_factory=lambda: "")
     collate_fn: Optional[Union[Callable, None]] = None
-    nn_kwargs: Optional[Union[dict, None]] = None
-    extra_kwargs: Optional[Union[dict, None]] = None
+    nn_dict: Optional[Union[dict, None]] = None
+    performance_dict: Optional[Union[dict, None]] = None
+    extra_dict: Optional[Union[dict, None]] = None
 
     def update_nn_kwargs(self, optimizer_: Any, scheduler_: Any, criterion_: Any, learning_rate: float, epochs: int):
         reprs = {'optimizer': str(optimizer_.__repr__),
@@ -34,16 +41,28 @@ class Configuration:
                  'learning_rate': learning_rate,
                  'epochs': epochs}
         for k, v in reprs.items():
-            if k in self.nn_kwargs and self.nn_kwargs[k] != v:
-                print(f"Warning: {k} will be updated from {self.nn_kwargs[k]} in the config to {v}")
-            self.nn_kwargs[k] = v
+            if k in self.nn_dict and self.nn_dict[k] != v:
+                print(f"Warning: {k} will be updated from {self.nn_dict[k]} in the config to {v}")
+            self.nn_dict[k] = v
 
     def __post_init__(self):
-        if self.nn_kwargs is None:
-            self.nn_kwargs = {}
-        if self.extra_kwargs is None:
-            self.extra_kwargs = {}
+        if self.nn_dict is None:
+            self.nn_dict = {}
+        if self.extra_dict is None:
+            self.extra_dict = {}
         assert self.test_box_fragment in self.fragments, "Test box fragment must be in fragments"
+
+    def __getitem__(self, key: str):
+        return getattr(self, key)
+
+    def __setitem__(self, key: str, value: Any):
+        setattr(self, key, value)
+
+
+def get_fully_qualified_name(obj: Any) -> str:
+    module = obj.__module__
+    name = obj.__name__
+    return f"{module}.{name}"
 
 
 def serialize(obj: Any) -> Any:
@@ -59,13 +78,4 @@ def serialize(obj: Any) -> Any:
         return obj
 
 
-def save_config(config: Configuration, file_path: str) -> None:
-    config_dict = asdict(config, dict_factory=lambda obj: {k: serialize(v) for k, v in obj})
-    with open(file_path, "w") as json_file:
-        json.dump(config_dict, json_file, indent=4)
 
-
-def read_config(file_path: str) -> Configuration:
-    with open(file_path, "r") as json_file:
-        config_dict = json.load(json_file)
-    return Configuration(**config_dict)

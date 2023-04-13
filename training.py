@@ -1,9 +1,10 @@
-import datetime
+import copy
+import multiprocessing as mp
 import pprint
-from timeit import default_timer as timer
-from itertools import islice
 from dataclasses import dataclass
-from typing import Any, Generator
+from itertools import islice
+from timeit import default_timer as timer
+from typing import Generator
 
 import dask
 import numpy as np
@@ -13,14 +14,15 @@ import torch.optim as optim
 from torch.utils.tensorboard import SummaryWriter
 from tqdm import tqdm
 from xarray import DataArray
-import multiprocessing as mp
 
-from vesuvius.config import Configuration, read_config, save_config
-from vesuvius.dataloader import get_train_loader, get_test_loader
+from vesuvius.config import Configuration
+from vesuvius.data_io import SaveModel, LoadModel
+from vesuvius.dataloader import get_train_loader, get_test_loader, get_train_loader_regular_z
+from vesuvius.datapoints import Datapoint, DatapointTuple
+from vesuvius.models import CNN1
+from vesuvius.sampler import CropBoxSobol, CropBoxRegular
 from vesuvius.scroll_dataset import BaseDataset
-from vesuvius.sampler import CropBoxSobol
-from vesuvius.data_utils import TrackerAvg, Datapoint
-
+from vesuvius.trackers import TrackerAvg
 
 pp = pprint.PrettyPrinter(indent=4)
 dask.config.set(scheduler='synchronous')
@@ -34,24 +36,25 @@ CONFIG_PATH = 'configs/config.json'
 
 EPOCHS = 1
 CACHED_DATA = True
-FORCE_CACHE_REST = False  # Deletes cache. Only used if CACHED_DATA is True.
+FORCE_CACHE_RESET = False  # Deletes cache. Only used if CACHED_DATA is True.
 RESET_CACHE_EPOCH_INTERVAL = 10
-SAVE_MODEL_INTERVAL = 100_000
+SAVE_MODEL_INTERVAL = 1_000
 TEST_MODEL = True
 
 
 class SampleXYZ(BaseDataset):
 
-    def get_item_as_data_array(self, index: int) -> Datapoint:
+    def get_item_as_data_array(self, index: int) -> DatapointTuple:
         rnd_slice = self.get_slice(index)
         slice_xy = {key: value for key, value in rnd_slice.items() if key in ('x', 'y')}
         label = self.ds.labels.sel(**slice_xy).transpose('x', 'y')
         voxels = self.ds.images.sel(**rnd_slice).transpose('z', 'x', 'y')
         # voxels = self.normalise_voxels(voxels)
+        voxels = voxels.expand_dims('Cin')
         s = rnd_slice
-        dp = Datapoint(voxels, label, self.ds.fragment,
+        dp = Datapoint(voxels, int(self.label_operation(label)), self.ds.fragment,
                        s['x'].start, s['x'].stop, s['y'].start, s['y'].stop, s['z'].start, s['z'].stop)
-        return dp
+        return dp.to_namedtuple()
 
 
 # Label processors
@@ -61,52 +64,7 @@ def centre_pixel(da: DataArray) -> DataArray:
     return da.isel(x=len(da.x) // 2, y=len(da.y) // 2).astype(np.float32)
 
 
-# Models
-
-
-def cnn1_sequential():
-    return nn.Sequential(
-        nn.Conv3d(1, 16, 3, 1, 1),
-        nn.MaxPool3d(2, 2),
-        nn.Conv3d(16, 32, 3, 1, 1),
-        nn.MaxPool3d(2, 2),
-        nn.Conv3d(32, 64, 3, 1, 1),
-        nn.MaxPool3d(2, 2),
-        nn.Flatten(start_dim=1),
-        nn.LazyLinear(128),
-        nn.ReLU(),
-        nn.LazyLinear(1),
-        nn.Sigmoid())
-
-
-class CNN1(nn.Module):
-
-    def __init__(self):
-        super(CNN1, self).__init__()
-        self.conv1 = nn.Conv3d(1, 16, 3, 1, 1)
-        self.pool1 = nn.MaxPool3d(2, 2)
-        self.conv2 = nn.Conv3d(16, 32, 3, 1, 1)
-        self.pool2 = nn.MaxPool3d(2, 2)
-        self.conv3 = nn.Conv3d(32, 64, 3, 1, 1)
-        self.pool3 = nn.MaxPool3d(2, 2)
-        self.flatten = nn.Flatten(start_dim=1)
-        self.fc1 = nn.LazyLinear(128)
-        self.relu = nn.ReLU()  # Use a single ReLU instance
-        self.fc2 = nn.LazyLinear(1)
-        self.sigmoid = nn.Sigmoid()
-
-    def forward(self, x: torch.Tensor):
-        x = self.pool1(self.conv1(x))
-        x = self.pool2(self.conv2(x))
-        x = self.pool3(self.conv3(x))
-        x = self.flatten(x)
-        x = self.relu(self.fc1(x))
-        x = self.sigmoid(self.fc2(x))
-        return x
-
-
 # Configuration
-
 
 def convert_config(cfg: dataclass) -> dataclass:
     """Convert the string representation of non-basic data types
@@ -119,10 +77,15 @@ def convert_config(cfg: dataclass) -> dataclass:
     return cfg
 
 
+def get_config_model(config_path: str, model_path: str):
+    lm = LoadModel(config_path, model_path)
+    return convert_config(lm.config()), lm.model()
+
+
 if READ_CONFIG_FILE:
-    print('Reading existing config file...\n')
-    config = read_config(CONFIG_PATH)
-    config = convert_config(config)
+    loader = LoadModel('output/save_model/20230412_235004', 1)
+    model = loader.model()
+    config = loader.config
 else:
     # Hold back data test box for fragment
     XL, YL = 1100, 3500  # lower left corner of the test box
@@ -130,42 +93,49 @@ else:
 
     print('Getting config from Configuration instantiation...\n')
     config = Configuration(info="Sampling every 5th layer",
-                           model=cnn1_sequential,
+                           model=CNN1,
                            volume_dataset_cls=SampleXYZ,
                            crop_box_cls=CropBoxSobol,
                            label_fn=centre_pixel,
-                           training_steps=1_000,  # If caching, this should be small enough to fit on disk
+                           training_steps=1_00,  # If caching, this should be small enough to fit on disk
                            batch_size=32,
                            fragments=[1, 2, 3],
-                           prefix='/data/kaggle/vesuvius/train/',
                            test_box=(XL, YL, XL + WIDTH, YL + HEIGHT),  # Hold back rectangle
                            test_box_fragment=1,  # Hold back fragment
                            box_width_xy=61,
-                           box_width_z=10,
+                           box_width_z=8,
                            balance_ink=True,
+                           shuffle=True,
+                           group_pixels=False,
                            num_workers=min(1, mp.cpu_count() - 1),
+                           prefix='/data/kaggle/vesuvius/train/',
+                           suffix_cache='sobol',
                            collate_fn=None)
 
-model = config.model().to(DEVICE)
+config_regular_z = copy.copy(config)
+config_regular_z.suffix_cache = 'regular'
+config_regular_z.crop_box_cls = CropBoxRegular
+config_regular_z.shuffle = False
+config_regular_z.group_pixels = True
+config_regular_z.balance_ink = False
+config_regular_z.sampling = 5
+config_regular_z.stride_xy = 61
+config_regular_z.stride_z = 6
 
 
 # Training
 
 
-def save_model_and_config(cfg: dataclass, torch_model: Any, prefix: str = ''):
-    now = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
-    torch.save(torch_model.state_dict(), f"output/save_model/{prefix}_model_{now}.pt")
-    save_config(cfg, f"output/save_model/{prefix}_config_{now}.json")
-
-
-def train_loaders() -> Generator[Datapoint, None, None]:
+def train_loaders(cfg) -> Generator[Datapoint, None, None]:
     for epoch in range(EPOCHS):
         reset_cache = CACHED_DATA and (epoch != 0 and epoch % RESET_CACHE_EPOCH_INTERVAL == 0)
-        reset_cache = reset_cache or (epoch == 0 and FORCE_CACHE_REST)
-        yield from get_train_loader(config, cached=CACHED_DATA, reset_cache=reset_cache)
+        reset_cache = reset_cache or (epoch == 0 and FORCE_CACHE_RESET)
+        yield from get_train_loader(cfg, cached=CACHED_DATA, reset_cache=reset_cache)
 
 
 if __name__ == '__main__':
+
+    model = config.model().to(DEVICE)
 
     print(model, '\n')
     pp.pprint(config)
@@ -180,7 +150,10 @@ if __name__ == '__main__':
         print(f'Shape of sample batches: {rnd_vals.shape}', '\n')
         ma = model.forward(rnd_vals)
 
-    test_loader = get_test_loader(config)
+    train_loader_sobol = train_loaders(config)
+    test_loader_sobol = get_test_loader(config)
+    # train_loader_regular gets samples across the z dimension
+    train_loader_regular_z = get_train_loader_regular_z(config_regular_z, FORCE_CACHE_RESET)
 
     # Train
 
@@ -198,16 +171,18 @@ if __name__ == '__main__':
     test_loss = TrackerAvg('loss/test', writer)
     lr_track = TrackerAvg('stats/lr', writer)
 
+    saver = SaveModel(1)
+
     model.train()
     time_start = timer()
     tqdm_kwargs = dict(total=total, disable=False, desc='Training', position=0)
     i = None
-    for i, datapoint in tqdm(enumerate(train_loaders()), **tqdm_kwargs):
+    for i, datapoint in tqdm(enumerate(train_loader_sobol), **tqdm_kwargs):
         if i >= total:
             break
         optimizer.zero_grad()
         outputs = model(datapoint.voxels.to(DEVICE))
-        loss = criterion(outputs, datapoint.label.to(DEVICE))
+        loss = criterion(outputs, datapoint.label.float().to(DEVICE))
         loss.backward()
         optimizer.step()
         scheduler.step()
@@ -219,16 +194,17 @@ if __name__ == '__main__':
             continue
 
         if i % SAVE_MODEL_INTERVAL == 0:
-            save_model_and_config(config, model, prefix='intermediate')
+            saver.model(model)
+            saver.config(config)
 
-        if not i % 100 == 0:
+        if not i % 5 == 0:
             continue
 
         model.eval()
         with torch.no_grad():
-            for iv, datapoint_test in enumerate(islice(test_loader, 5)):
+            for iv, datapoint_test in enumerate(islice(train_loader_regular_z, 5)):
                 outputs = model(datapoint_test.voxels.to(DEVICE))
-                val_loss = criterion(outputs, datapoint_test.label.to(DEVICE))
+                val_loss = criterion(outputs, datapoint_test.label.float().to(DEVICE))
                 test_loss.update(val_loss.item(), len(datapoint_test.voxels))
 
         train_loss.log(i)
@@ -241,7 +217,12 @@ if __name__ == '__main__':
             print("Training stopped early. Try clearing the cache "
                   "(with FORCE_CACHE_REST = True) and restart the training.")
 
-    save_model_and_config(config, model)
+    config['performance_dict'] = {'loss/train': train_loss.average_loss,
+                                  'loss/test': test_loss.average_loss,
+                                  'steps': i}
+    saver.model(model)
+    saver.config(config)
+
     writer.flush()
     time_end = timer()
     time_spent = time_end - time_start

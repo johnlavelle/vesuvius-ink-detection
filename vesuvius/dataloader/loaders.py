@@ -3,20 +3,23 @@ import random
 import shutil
 import time
 from typing import Union
+from dataclasses import dataclass
 
 import numpy as np
 import torch
 import xarray as xr
 from torch.utils.data import DataLoader, ConcatDataset, Dataset
+from torch.utils.data._utils.collate import default_collate
+
 from tqdm import tqdm
 
 from vesuvius.config import Configuration
-from vesuvius.config import save_config
 from vesuvius.data_io import dataset_to_zarr
 from vesuvius.data_io import read_dataset_from_zarr
-from vesuvius.data_utils import Datapoint
+from vesuvius.datapoints import Datapoint
 from vesuvius.scroll_dataset import CachedDataset
-from vesuvius.sampler import CropBoxSobol
+from vesuvius.sampler import CropBoxSobol, CropBoxRegular
+
 from . import scroll_datasets
 
 try:
@@ -27,7 +30,8 @@ except ImportError:
 worker_seed = None
 
 
-def worker_init_fn(worker_id: int):
+def worker_init_fn_diff(worker_id: int):
+    """Initialize the worker with a different seed for each worker."""
     global worker_seed
     seed = int(time.time()) ^ (worker_id + os.getpid())
     random.seed(seed)
@@ -35,25 +39,43 @@ def worker_init_fn(worker_id: int):
     torch.manual_seed(seed)
 
 
-def standard_data_loader(configuration: Configuration) -> DataLoader:
-    xarray_dataset_iter = scroll_datasets.XarrayDatasetIter(configuration)
-    datasets = scroll_datasets.TorchDatasetIter(configuration, xarray_dataset_iter)
+def worker_init_fn_same(worker_id):
+    """Initialize the worker with the same seed for each worker."""
+    global worker_seed
+    base_seed = torch.initial_seed()
+    worker_seed = base_seed + worker_id
+    torch.manual_seed(worker_seed)
+
+
+worker_init_fns = {
+    'diff': worker_init_fn_diff,
+    'same': worker_init_fn_same
+}
+
+
+def standard_data_loader(cfg: Configuration, worker_init='diff') -> DataLoader:
+    xarray_dataset_iter = scroll_datasets.XarrayDatasetIter(cfg)
+    datasets = scroll_datasets.TorchDatasetIter(cfg, xarray_dataset_iter)
     datasets = ConcatDataset(datasets)
     return DataLoader(datasets,
-                      batch_size=configuration.batch_size,
-                      num_workers=configuration.num_workers,
-                      prefetch_factor=None,
-                      shuffle=True,
-                      worker_init_fn=worker_init_fn,
-                      collate_fn=configuration.collate_fn)
+                      batch_size=cfg.batch_size,
+                      num_workers=cfg.num_workers,
+                      shuffle=cfg.shuffle,
+                      worker_init_fn=worker_init_fns[worker_init],
+                      collate_fn=cfg.collate_fn)
 
 
 def cached_data_loader(cfg: Configuration, reset_cache: bool = False) -> Dataset:
     cache_dir = os.path.join(cfg.prefix, 'data_cache')
-    zarr_dir = os.path.join(cache_dir, 'cache.zarr')
+    zarr_dir = os.path.join(cache_dir, f'cache_{cfg.suffix_cache}.zarr')
+    cfg_path = os.path.join(cache_dir, f"config_{cfg.suffix_cache}.json")
 
     if reset_cache:
-        shutil.rmtree(cache_dir, ignore_errors=True)
+        shutil.rmtree(zarr_dir, ignore_errors=True)
+        try:
+            os.remove(cfg_path)
+        except FileNotFoundError:
+            pass
 
     if not os.path.isdir(zarr_dir):
         os.makedirs(cache_dir, exist_ok=True)
@@ -67,6 +89,9 @@ def cached_data_loader(cfg: Configuration, reset_cache: bool = False) -> Dataset
         datapoint: Datapoint
         for i, datapoint in tqdm(enumerate(train_loader), total=total,
                                  desc='Caching data', position=1, leave=False):
+            if datapoint is None:
+                continue
+
             # Create a dataset with the samples and labels
             sub_volume_len = datapoint.voxels.shape[0]
             sub_volume_coord = np.arange(running_sample_len, running_sample_len + sub_volume_len)
@@ -78,21 +103,35 @@ def cached_data_loader(cfg: Configuration, reset_cache: bool = False) -> Dataset
             parameters = {k: xr.DataArray(v, dims=('sample', 'empty'), coords=coords) for k, v in dp.items() if
                           k not in samples_labels.keys()}
             ds = xr.Dataset({**samples_labels, **parameters})
-
+            if len(ds.sample) > 1:
+                for k in ['fragment', 'x_start', 'x_stop', 'y_start', 'y_stop', 'z_start', 'z_stop', 'fxy_idx']:
+                    ds[k] = ds[k].squeeze()
+            ds = ds.assign_coords(fragment=ds.fragment,
+                                  x_start=ds.x_start,
+                                  x_stop=ds.x_stop,
+                                  y_start=ds.y_start,
+                                  y_stop=ds.y_stop,
+                                  z_start=ds.z_start,
+                                  z_stop=ds.z_stop,
+                                  fxy_idx=ds.fxy_idx)
             dataset_to_zarr(ds, zarr_dir, 'sample')
-            save_config(cfg, os.path.join(cache_dir, f"config.json"))
+            save_config(cfg, cfg_path)
 
             running_sample_len += sub_volume_len
-    return CachedDataset(zarr_dir, cfg.batch_size)
+
+    return CachedDataset(zarr_dir, cfg.batch_size, group_pixels=cfg.group_pixels)
 
 
-def get_train_loader(cfg: Configuration, cached=False, reset_cache=False) -> Union[DataLoader, Dataset]:
+def get_train_loader(cfg: Configuration,
+                     cached=False,
+                     reset_cache=False,
+                     worker_init='diff') -> Union[DataLoader, Dataset]:
     if reset_cache and not cached:
         raise ValueError("reset_cache can only be True if cached is also True")
     if cached:
         return cached_data_loader(cfg, reset_cache)
     else:
-        return standard_data_loader(cfg)
+        return standard_data_loader(cfg, worker_init)
 
 
 def get_test_loader(cfg: Configuration) -> DataLoader:
@@ -109,5 +148,24 @@ def get_test_loader(cfg: Configuration) -> DataLoader:
                                           max_iterations=cfg.training_steps,
                                           crop_cls=CropBoxSobol,
                                           label_operation=cfg.label_fn,
-                                          balance_ink=False)
+                                          balance_ink=False,
+                                          stride_xy=cfg.stride_xy,
+                                          stride_z=cfg.stride_z)
     return DataLoader(test_dataset, batch_size=cfg.batch_size, shuffle=False, num_workers=cfg.num_workers)
+
+
+def get_train_loader_regular_z(cfg: dataclass, force_cache_reset) -> DataLoader:
+    def collate_catch_errs(batch):
+        filtered_batch = []
+        for item in batch:
+            if isinstance(item, IndexError):
+                continue
+            elif isinstance(item, Exception):
+                raise item
+            else:
+                filtered_batch.append(item)
+        if filtered_batch:
+            return default_collate(filtered_batch)
+
+    cfg.collate_fn = collate_catch_errs
+    return get_train_loader(cfg, cached=True, reset_cache=force_cache_reset, worker_init='same')

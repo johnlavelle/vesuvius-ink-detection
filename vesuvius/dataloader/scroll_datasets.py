@@ -57,30 +57,32 @@ class TorchDatasetIter(DatasetIter):
     This done to reduce the memory footprint of the dataset.
     """
 
-    def __init__(self, config: Configuration, datasets: DatasetIter):
-        super().__init__(config)
-        self.training_steps = config.training_steps
-        self.box_width_sample = config.box_width_xy
-        self.dataset_class = config.volume_dataset_cls
-        self.label_operation = config.label_fn
-        self.fragments = config.fragments
-        self.prefix = config.prefix
+    def __init__(self, cfg: Configuration, datasets: DatasetIter):
+        super().__init__(cfg)
+        self.training_steps = cfg.training_steps
+        self.box_width_sample = cfg.box_width_xy
+        self.dataset_class = cfg.volume_dataset_cls
+        self.label_operation = cfg.label_fn
+        self.fragments = cfg.fragments
+        self.prefix = cfg.prefix
 
-        self.z_box_width = config.box_width_z
-        self.crop_box_cls = config.crop_box_cls
-        self.box_width_sample = config.box_width_xy
+        self.z_box_width = cfg.box_width_z
+        self.crop_box_cls = cfg.crop_box_cls
+        self.box_width_sample = cfg.box_width_xy
 
-        self.label_operation = config.label_fn
-        self.samples = config.training_steps
+        self.label_operation = cfg.label_fn
+        self.samples = cfg.training_steps
+        self.stride_xy = cfg.stride_xy
+        self.stride_z = cfg.stride_z
 
         self.datasets = datasets
 
         self.samples_handler = WeightedSamples(self.samples,
                                                self.prefix,
                                                self.fragments,
-                                               num_workers=config.num_workers)
+                                               num_workers=cfg.num_workers)
         self.current_ds = None
-        self.balance_ink = config.balance_ink
+        self.balance_ink = cfg.balance_ink
 
     def __iter__(self):
         return self
@@ -100,4 +102,6 @@ class TorchDatasetIter(DatasetIter):
                                   transformer=None,
                                   crop_cls=self.crop_box_cls,
                                   label_operation=self.label_operation,
-                                  balance_ink=self.balance_ink)
+                                  balance_ink=self.balance_ink,
+                                  stride_xy=self.stride_xy,
+                                  stride_z=self.stride_z)

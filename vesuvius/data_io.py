@@ -1,19 +1,26 @@
+import datetime
 import gc
 import glob
+import json
 import os
+import pickle
 import warnings
+from dataclasses import asdict
 from os.path import join
 from typing import Any
 from typing import Dict, Union, Literal
 
 import dask
 import numpy as np
+import torch
+import torch.nn as nn
 import xarray as xr
 import zarr
 from tqdm import tqdm
 from zarr.sync import ProcessSynchronizer
 
 from vesuvius.utils import normalise_images
+from vesuvius.config import Configuration, serialize
 
 
 def read_tiffs(fragment: int, prefix: str) -> xr.Dataset:
@@ -105,3 +112,46 @@ def read_dataset_from_zarr(fragment: Union[int, str], workers: int, prefix: str,
         dataset.mask.load()
         dataset.labels.load()
         return dataset
+
+
+# Models
+class SaveModel:
+    def __init__(self, name: Union[str, int] = ''):
+        self.name = str(name)
+        if self.name:
+            self.name = '_' + self.name
+        now = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+        self.path = f"output/save_model/{now}"
+        os.makedirs(self.path, exist_ok=True)
+
+    def model(self, torch_model: nn.Module):
+        torch.save(torch_model.state_dict(), join(self.path, f"model{self.name}.pt"))
+
+    def config(self, config: Configuration) -> None:
+        config_dict = asdict(config, dict_factory=lambda obj: {k: serialize(v) for k, v in obj})
+        with open(join(self.path, f"config{self.name}.json"), "w") as json_file:
+            json.dump(config_dict, json_file, indent=4)
+
+
+class LoadModel:
+    def __init__(self, config_path, model_path):
+        self.config_path = config_path
+        self.model_path = model_path
+        self._config = self._load_config()
+
+    def model(self) -> nn.Module:
+        _model = self._config.model()
+        _model.load_state_dict(torch.load(self.model_path))
+        return self._config.model
+
+    def _load_config(self) -> Configuration:
+        with open(self.config_path, "r") as json_file:
+            config_dict = json.load(json_file)
+        return Configuration(**config_dict)
+
+    def config(self) -> Configuration:
+        return self._config
+
+
+
+

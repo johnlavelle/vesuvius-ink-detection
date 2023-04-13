@@ -1,7 +1,6 @@
-from typing import Tuple, Any, Callable, Optional
 from abc import ABC, abstractmethod
 from functools import lru_cache
-import numbers
+from typing import Tuple, Any, Callable, Type, Union, cast
 
 import dask
 import numpy as np
@@ -10,9 +9,9 @@ import xarray as xr
 from torch.utils.data import Dataset
 from xarray import DataArray
 
-from vesuvius.sampler import CropBoxIter, CropBoxSobol
-from vesuvius.sampler import VolumeSampler
-from vesuvius.data_utils import Datapoint
+from vesuvius.datapoints import Datapoint, DatapointTuple
+from vesuvius.sampler import BaseCropBox, CropBoxSobol, CropBoxRegular
+from vesuvius.sampler import VolumeSamplerRndXYZ, VolumeSamplerRegularZ
 
 try:
     from typing import Protocol
@@ -29,10 +28,11 @@ class BaseDataset(ABC, Dataset):
                  max_iterations: int = 10_000,
                  label_operation: Callable[[DataArray], float] = lambda x: x.mean(),
                  transformer: Callable[[torch.Tensor], DataArray] = None,
-                 crop_cls: Callable[
-                     [Tuple[int, int, int, int, int, int], int, int, Optional[int]], CropBoxIter] = CropBoxSobol,
+                 crop_cls: Type[BaseCropBox] = CropBoxSobol,
                  balance_ink: bool = False,
-                 seed: int = 42):
+                 seed: int = 42,
+                 stride_xy: int = None,
+                 stride_z: int = None):
         self.ds = dataset
         self.box_width_xy = box_width_xy
         self.box_width_z = box_width_z
@@ -42,103 +42,74 @@ class BaseDataset(ABC, Dataset):
         self.crop_box_cls = crop_cls
         self.balance_ink = balance_ink
         self._indexes = set()
-        self.seed = seed
+        self.stride_xy = stride_xy
+        self.stride_z = stride_z
+
+        volume_sampler_dict = {CropBoxSobol: VolumeSamplerRndXYZ,
+                               CropBoxRegular: VolumeSamplerRegularZ}
+        self.volume_sampler_cls = volume_sampler_dict[cast(Type[CropBoxSobol | CropBoxRegular], self.crop_box_cls)]
+
+        self.sampler = None
+        self.seed = seed  # this sets self.sampler
+        self.count = 0
 
     @abstractmethod
     def get_item_as_data_array(self, index: int) -> Datapoint:
         ...
 
     @lru_cache
-    def get_sampler(self, seed):
-        return VolumeSampler(self.ds, self.box_width_xy, self.box_width_z,
-                             self.max_iterations,
-                             balance=self.balance_ink, crop_cls=self.crop_box_cls, seed=seed)
+    def get_sampler(self, seed) -> VolumeSamplerRndXYZ:
+        return self.volume_sampler_cls(self.ds,
+                                       self.box_width_xy,
+                                       self.box_width_z,
+                                       self.max_iterations,
+                                       balance=self.balance_ink,
+                                       crop_cls=self.crop_box_cls,
+                                       seed=seed,
+                                       stride_xy=self.stride_xy,
+                                       stride_z=self.stride_z)
 
-    def __getitem__(self, index: int) -> Datapoint:
-        assert isinstance(index, int)
-        assert index >= 0
-        if index >= self.max_iterations:
-            raise StopIteration
-
+    def __getitem__(self, index: int) -> Union[Datapoint, IndexError]:
         worker_info = torch.utils.data.get_worker_info()
         if worker_info is not None:
             self.seed = worker_info.seed
+
         try:
             datapoint = self.get_item_as_data_array(index)
-            self.validate_datapoint(datapoint)
-        except ValueError as err:
-            print(f"Error {err} with index {index}")
-            return self.__getitem__(index)
+            self.count += 1
+            return datapoint
+        except IndexError as err:
+            return err
 
-        return self.convert_to_tensors(datapoint)
-
-    @staticmethod
-    def validate_datapoint(datapoint: Datapoint) -> Datapoint:
-        try:
-            assert np.isfinite(datapoint.voxels).all().values.item(), 'Non finite number in voxels'
-        except AssertionError as err:
-            raise ValueError(err)
-        return datapoint
-
-    def convert_to_tensors(self, datapoint: Datapoint) -> Datapoint:
-        datapoint = datapoint._asdict()
-        for k, v in datapoint.items():
-            if k == 'label':
-                vl = self.label_operation(datapoint[k])
-                if isinstance(vl, DataArray):
-                    datapoint[k] = vl.values.astype(np.float32)
-                else:
-                    datapoint[k] = vl
-            if k == 'voxels':
-                datapoint[k] = v.expand_dims('Cin')
-            if isinstance(datapoint[k], DataArray):
-                np_arr = datapoint[k].values.astype(np.float32)
-                np_arr.setflags(write=False)
-                datapoint[k] = np_arr.copy()
-            if isinstance(datapoint[k], np.ndarray) and datapoint[k].shape == ():
-                datapoint[k] = datapoint[k].item()
-            if isinstance(datapoint[k], numbers.Integral):
-                datapoint[k] = np.array([datapoint[k]], dtype=np.int64).reshape(-1)
-            if isinstance(datapoint[k], numbers.Real):
-                datapoint[k] = np.array([datapoint[k]], dtype=np.float32).reshape(-1)
-            datapoint[k] = torch.from_numpy(datapoint[k])
-        return Datapoint(**datapoint)
-
-    def nbytes(self):
+    def nbytes(self) -> int:
         """Total number of bytes in the dataset"""
         return self.ds.nbytes
 
     @property
-    def seed(self):
+    def seed(self) -> int:
         return self._seed
 
     @seed.setter
-    def seed(self, value):
+    def seed(self, value) -> None:
         self._seed = value
         self.sampler = self.get_sampler(self._seed)
 
     # @functools.lru_cache(maxsize=None)
     def get_slice(self, idx: int) -> Any:
         self._indexes.add(idx)
-        return next(self.sampler)
+        return self.sampler[idx]
 
     def __len__(self) -> int:
-        return self.max_iterations
-
-    @staticmethod
-    def normalise_voxels(voxels) -> DataArray:
-        voxels_mean_z = voxels.mean(dim=['x', 'y'], skipna=True)
-        voxels_std_z = voxels.std(dim=['x', 'y'], skipna=True)
-        eps = 1e-6  # set a small non-zero value
-        voxels_std_z = voxels_std_z.where(voxels_std_z != 0, eps)
-        return (voxels - voxels_mean_z) / voxels_std_z
+        if self.max_iterations is None:
+            return len(self.sampler)
+        else:
+            return self.max_iterations
 
 
 class TestVolumeDataset(BaseDataset):
     """
     Get the test dataset.
     """
-
     def __init__(self,
                  dataset: Any,
                  box_width_sample: int,
@@ -193,21 +164,44 @@ class TestVolumeDataset(BaseDataset):
         raise NotImplementedError
 
 
+# Define a function to concatenate the variables as strings
+def concat_variables(fragment, x_start, y_start):
+    return fragment.astype(str) + '_' + x_start.astype(str) + '_' + y_start.astype(str)
+
+
 class CachedDataset(Dataset):
-    def __init__(self, zarr_path: str, group_size=1):
+    def __init__(self, zarr_path: str, group_size=32, group_pixels=False):
         with dask.config.set(scheduler='synchronous'), xr.open_zarr(zarr_path) as self.ds:
             self.ds = self.ds.chunk({'sample': group_size})
-            self.ds_grp = self.ds.groupby(self.ds.sample // group_size)
+            if group_pixels:
+                self.ds = self.ds.sortby('fxy_idx')
+                self.hash_mappings = {i: v for i, v in enumerate(np.unique(self.ds.fxy_idx))}
+                self.ds_grp = self.ds.groupby('fxy_idx')
+            else:
+                self.ds_grp = self.ds.groupby(self.ds.sample // group_size)
+                self.hash_mappings = None
 
-    def __getitem__(self, index: int):
+    def idx_mapping(self, index: int) -> int:
+        if self.hash_mappings:
+            return self.hash_mappings[index]
+        else:
+            return index
+
+    def __getitem__(self, index: int) -> DatapointTuple:
         try:
-            ds_sub = self.ds_grp[index]
+            ds = self.ds_grp[self.idx_mapping(index)]
         except KeyError:
             raise IndexError
 
-        das = (ds_sub['voxels'], ds_sub['label'], ds_sub['fragment'], ds_sub['x_start'], ds_sub['x_stop'],
-               ds_sub['y_start'], ds_sub['y_stop'],ds_sub['z_start'], ds_sub['z_stop'])
-        return Datapoint(*(torch.tensor(da.values) for da in das))
+        return Datapoint(ds['voxels'],
+                         ds['label'],
+                         ds['fragment'],
+                         ds['x_start'],
+                         ds['x_stop'],
+                         ds['y_start'],
+                         ds['y_stop'],
+                         ds['z_start'],
+                         ds['z_stop']).to_namedtuple()
 
     def __len__(self):
-        return len(self.ds.sample)
+        return len(self.ds_grp)
