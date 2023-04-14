@@ -3,20 +3,20 @@ from torch.nn import Module
 from dataclasses import dataclass, field
 from typing import Union, Optional, Callable, List, Tuple, Any, Type
 
-from .sampler import BaseCropBox, BaseVolumeSampler
+from vesuvius.sampler import BaseCropBox
+from vesuvius.scroll_dataset import BaseDataset
 
 
 @dataclass
 class Configuration:
     info: str
-    model: Module
-    volume_dataset_cls: Type[BaseVolumeSampler]
+    model: Type[Module]
+    volume_dataset_cls: Type[BaseDataset]
     crop_box_cls: Type[BaseCropBox]
     label_fn: Callable
     training_steps: int
     batch_size: int
     fragments: Union[List[int], Tuple[int]]
-
     test_box: Tuple[int, int, int, int]
     test_box_fragment: int = 1
     box_width_xy: int = 61
@@ -76,6 +76,3 @@ def serialize(obj: Any) -> Any:
         return obj.as_dict()
     else:
         return obj
-
-
-

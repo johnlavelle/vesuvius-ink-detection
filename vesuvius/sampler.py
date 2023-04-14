@@ -27,8 +27,8 @@ class BaseCropBox(ABC):
                  stride_z: int = None):
         """
         :param total_bounds: (x_min, x_max, y_min, y_max, z_min, z_max)
-        :param sample_box_width:
-        :param seed:
+        :param width_xy:
+        :param width_z:
         """
         self.bounds = total_bounds
         self.width_xy = width_xy
@@ -68,7 +68,7 @@ class CropBoxSobol(BaseCropBox):
                  stride_xy=None,
                  stride_z=None):
         """
-        :param total_bounds:
+        :param total_bounds: (x_min, x_max, y_min, y_max, z_min, z_max)
         :param width_xy:
         :param width_z:
         """
@@ -275,11 +275,8 @@ class VolumeSamplerRegularZ(BaseVolumeSampler):
         import matplotlib.pyplot as plt
         from shapely.wkt import loads
 
-        # Replace this with the polygon string from your output
         polygon_from_output = loads(mask_poly.wkt)
-
         x, y = polygon_from_output.exterior.xy
-
         plt.figure()
         plt.plot(x, y, marker='o', linestyle='-')
         plt.axis('equal')

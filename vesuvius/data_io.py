@@ -3,7 +3,6 @@ import gc
 import glob
 import json
 import os
-import pickle
 import warnings
 from dataclasses import asdict
 from os.path import join
@@ -116,21 +115,24 @@ def read_dataset_from_zarr(fragment: Union[int, str], workers: int, prefix: str,
 
 # Models
 class SaveModel:
-    def __init__(self, name: Union[str, int] = ''):
+    def __init__(self, path, name: Union[str, int] = ''):
         self.name = str(name)
         if self.name:
             self.name = '_' + self.name
-        now = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
-        self.path = f"output/save_model/{now}"
+        self.path = path
+        self.conf_path = join(self.path, f"config{self.name}.json")
+        self.model_path = join(self.path, f"model{self.name}.pt")
         os.makedirs(self.path, exist_ok=True)
 
-    def model(self, torch_model: nn.Module):
-        torch.save(torch_model.state_dict(), join(self.path, f"model{self.name}.pt"))
+    def model(self, torch_model: nn.Module) -> str:
+        torch.save(torch_model.state_dict(), self.model_path)
+        return self.model_path
 
-    def config(self, config: Configuration) -> None:
+    def config(self, config: Configuration) -> str:
         config_dict = asdict(config, dict_factory=lambda obj: {k: serialize(v) for k, v in obj})
-        with open(join(self.path, f"config{self.name}.json"), "w") as json_file:
+        with open(self.conf_path, "w") as json_file:
             json.dump(config_dict, json_file, indent=4)
+            return self.conf_path
 
 
 class LoadModel:
@@ -142,7 +144,7 @@ class LoadModel:
     def model(self) -> nn.Module:
         _model = self._config.model()
         _model.load_state_dict(torch.load(self.model_path))
-        return self._config.model
+        return self._config.model()
 
     def _load_config(self) -> Configuration:
         with open(self.config_path, "r") as json_file:

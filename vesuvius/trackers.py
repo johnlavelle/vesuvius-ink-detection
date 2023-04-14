@@ -7,7 +7,7 @@ from torch.utils.tensorboard import SummaryWriter
 @dataclass
 class BaseTracker(ABC):
     tag: str
-    summary_writer: SummaryWriter = field(default_factory=SummaryWriter)
+    summary_writer: SummaryWriter
     value: float = 0.0
     i: int = 0
 
@@ -28,14 +28,11 @@ class TrackerAvg(BaseTracker):
         self.i += batch_size
 
     @property
-    def average_loss(self) -> float:
+    def average(self) -> float:
         try:
             return self.value / self.i
         except ZeroDivisionError:
             return 0.0
 
     def log(self, iteration: int) -> None:
-        try:
-            self.summary_writer.add_scalar(self.tag,  self.average_loss, iteration)
-        except ZeroDivisionError:
-            pass
+        self.summary_writer.add_scalar(self.tag, self.average, iteration)

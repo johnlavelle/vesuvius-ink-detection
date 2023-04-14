@@ -15,7 +15,7 @@ from tqdm import tqdm
 
 from vesuvius.config import Configuration
 from vesuvius.data_io import dataset_to_zarr
-from vesuvius.data_io import read_dataset_from_zarr
+from vesuvius.data_io import read_dataset_from_zarr, SaveModel
 from vesuvius.datapoints import Datapoint
 from vesuvius.scroll_dataset import CachedDataset
 from vesuvius.sampler import CropBoxSobol, CropBoxRegular
@@ -81,6 +81,7 @@ def cached_data_loader(cfg: Configuration, reset_cache: bool = False) -> Dataset
         os.makedirs(cache_dir, exist_ok=True)
 
         train_loader = get_train_loader(cfg)
+        saver = SaveModel()
 
         # Save the output of the data loader to a zarr file
 
@@ -115,10 +116,9 @@ def cached_data_loader(cfg: Configuration, reset_cache: bool = False) -> Dataset
                                   z_stop=ds.z_stop,
                                   fxy_idx=ds.fxy_idx)
             dataset_to_zarr(ds, zarr_dir, 'sample')
-            save_config(cfg, cfg_path)
-
             running_sample_len += sub_volume_len
-
+        saver.config(cfg)
+        shutil.move(saver.path, cache_dir)
     return CachedDataset(zarr_dir, cfg.batch_size, group_pixels=cfg.group_pixels)
 
 

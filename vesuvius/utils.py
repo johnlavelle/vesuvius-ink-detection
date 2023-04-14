@@ -1,16 +1,12 @@
 from typing import Tuple
-from abc import ABC, abstractmethod
-from dataclasses import dataclass, field
-
-import pandas as pd
-from shapely import Polygon, Point
-from torch.utils.tensorboard import SummaryWriter
 
 import numpy as np
+import pandas as pd
 import xarray as xr
-from xarray import DataArray, Dataset
+from shapely import Point
 from shapely.geometry import Polygon
 from skimage.measure import find_contours
+from xarray import DataArray, Dataset
 
 
 def normalise_images(dataset: Dataset) -> Dataset:
@@ -71,3 +67,28 @@ def check_points_in_polygon(points, polygon_coords):
     points_df['geometry'] = points_df.apply(lambda row: Point(row['x'], row['y']), axis=1)
     points_df['inside_polygon'] = points_df['geometry'].apply(lambda point: point.within(polygon))
     return points_df
+
+
+class Incrementer:
+    def __init__(self, start=0):
+        self.counter = start
+
+    def increment(self):
+        self.counter += 1
+
+    @property
+    def value(self):
+        return self.counter
+
+    def __eq__(self, other):
+        if isinstance(other, int):
+            return self.counter == other
+        if isinstance(other, Incrementer):
+            return self.counter == other.counter
+        return False
+
+    def __str__(self):
+        return f"Value: {self.counter}"
+
+    def __repr__(self):
+        return f"Incrementer(start={self.counter})"
