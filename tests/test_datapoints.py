@@ -51,10 +51,11 @@ def test_datapoint_to_namedtuple():
     y_start, y_stop = 0, 3
     z_start, z_stop = 0, 3
 
+    voxels = voxels.expand_dims('Cin')
+    voxels_tensor = torch.from_numpy(voxels.values.astype(np.float32))
     datapoint = Datapoint(voxels, label, fragment, x_start, x_stop, y_start, y_stop, z_start, z_stop)
     datapoint_tuple = datapoint.to_namedtuple()
 
-    voxels_tensor = torch.from_numpy(voxels.expand_dims('Cin').values.astype(np.float32))
     assert datapoint_tuple.voxels.equal(voxels_tensor)
     assert torch.is_tensor(datapoint_tuple.label)
     assert torch.is_tensor(datapoint_tuple.fragment)

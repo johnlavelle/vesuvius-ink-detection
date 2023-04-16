@@ -1,4 +1,3 @@
-import pytest
 from itertools import islice
 from vesuvius.sampler import CropBoxRegular
 

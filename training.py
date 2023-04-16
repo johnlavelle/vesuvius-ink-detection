@@ -9,13 +9,15 @@ from dataclasses import dataclass
 from functools import partial
 from itertools import islice
 from timeit import default_timer as timer
+from typing import Generator, Tuple, Any
 
 import dask
 import numpy as np
 import torch
-import torch.nn as nn
 import torch.optim as optim
 from torch import nn as nn
+import torch.nn.functional as func
+from torch.optim.optimizer import Optimizer
 from torch.utils.tensorboard import SummaryWriter
 from tqdm import tqdm
 from xarray import DataArray
@@ -25,9 +27,11 @@ from vesuvius.data_io import SaveModel, LoadModel
 from vesuvius.dataloader import get_train_loader, get_test_loader
 from vesuvius.datapoints import Datapoint, DatapointTuple
 from vesuvius.sampler import CropBoxSobol, CropBoxRegular
-from vesuvius.scroll_dataset import BaseDataset
+from vesuvius.fragment_dataset import BaseDataset
 from vesuvius.trackers import TrackerAvg
 from vesuvius.utils import Incrementer
+import tensorboard_access
+
 
 pp = pprint.PrettyPrinter(indent=4)
 dask.config.set(scheduler='synchronous')
@@ -39,13 +43,13 @@ print(f'Using the {DEVICE}\n')
 READ_CONFIG_FILE = False
 CONFIG_PATH = 'configs/config.json'
 
-EPOCHS = 1
 CACHED_DATA = True
-FORCE_CACHE_RESET = True  # Deletes cache. Only used if CACHED_DATA is True.
-RESET_CACHE_EPOCH_INTERVAL = 10
-SAVE_INTERVAL = 1
-VALIDATE_INTERVAL = 10
-TEST_MODEL = True
+FORCE_CACHE_RESET = False  # Deletes cache. Only used if CACHED_DATA is True.
+EPOCHS = 200
+RESET_CACHE_EPOCH_INTERVAL = 4
+SAVE_INTERVAL = 1_000_000
+VALIDATE_INTERVAL = 1_000
+LOG_INTERVAL = 100
 
 
 # Data Processing
@@ -56,13 +60,13 @@ def centre_pixel(da: DataArray) -> DataArray:
 
 class SampleXYZ(BaseDataset):
 
-    def get_item_as_data_array(self, index: int) -> DatapointTuple:
-        rnd_slice = self.get_slice(index)
+    def get_datapoint(self, index: int) -> DatapointTuple:
+        rnd_slice = self.get_volume_slice(index)
         slice_xy = {key: value for key, value in rnd_slice.items() if key in ('x', 'y')}
         label = self.ds.labels.sel(**slice_xy).transpose('x', 'y')
         voxels = self.ds.images.sel(**rnd_slice).transpose('z', 'x', 'y')
         # voxels = self.normalise_voxels(voxels)
-        voxels = voxels.expand_dims('Cin')
+        # voxels = voxels.expand_dims('Cin')
         s = rnd_slice
         dp = Datapoint(voxels, int(self.label_operation(label)), self.ds.fragment,
                        s['x'].start, s['x'].stop, s['y'].start, s['y'].stop, s['z'].start, s['z'].stop)
@@ -113,13 +117,53 @@ def cnn1_sequential():
         nn.Sigmoid())
 
 
+class HybridModel1(nn.Module):
+    def __init__(self, channels):
+        super(HybridModel1, self).__init__()
+        self.conv1 = nn.Conv2d(channels, 16, 3, 1, 1)
+        self.pool1 = nn.MaxPool2d(2, 2)
+        self.conv2 = nn.Conv2d(16, 32, 3, 1, 1)
+        self.pool2 = nn.MaxPool2d(2, 2)
+        self.conv3 = nn.Conv2d(32, 64, 3, 1, 1)
+        self.pool3 = nn.AdaptiveMaxPool2d((8, 8))
+        self.flatten = nn.Flatten(start_dim=1)
+
+        # FCN part for scalar input
+        self.fc_scalar = nn.Linear(1, 16)
+
+        # Combined layers (initialized later)
+        self.fc_combined1 = nn.Linear(64 * 8 * 8 + 16, 128)
+        self.relu = nn.ReLU()
+        self.fc_combined2 = nn.Linear(128, 1)
+        self.sigmoid = nn.Sigmoid()
+
+    def forward(self, x: torch.Tensor, scalar_input: torch.Tensor):
+        # CNN part
+        x = self.pool1(func.relu(self.conv1(x)))
+        x = self.pool2(func.relu(self.conv2(x)))
+        x = self.pool3(func.relu(self.conv3(x)))
+        x = self.flatten(x)
+
+        # FCN part
+        scalar_out = func.relu(self.fc_scalar(scalar_input))
+
+        # Combine CNN and FCN outputs
+        combined = torch.cat((x, scalar_out), dim=1)
+
+        # Combined layers
+        x = self.relu(self.fc_combined1(combined))
+        x = self.sigmoid(self.fc_combined2(x))
+
+        return x
+
+
 # Configuration
 
 
 def convert_config(cfg: dataclass) -> dataclass:
     """Convert the string representation of non-basic data types
     in a dataclass object to their corresponding objects."""
-    for key, type_ in config.__annotations__.items():
+    for key, type_ in config1.__annotations__.items():
         if type_ not in (str, int, float, bool, list, tuple, dict):
             value = getattr(cfg, key)
             if isinstance(value, str):
@@ -127,60 +171,72 @@ def convert_config(cfg: dataclass) -> dataclass:
     return cfg
 
 
-def get_config_model(config_path: str, model_path: str):
+def get_config_model(config_path: str, model_path: str) -> Tuple[Configuration, torch.nn.Module]:
     lm = LoadModel(config_path, model_path)
     return convert_config(lm.config()), lm.model()
 
 
 if READ_CONFIG_FILE:
     loader = LoadModel('output/runs/2023-04-14_17-37-44/', 1)
-    model = loader.model()
-    config = loader.config
+    model1 = loader.model()
+    config1 = loader.config
 else:
     # Hold back data test box for fragment
     XL, YL = 1100, 3500  # lower left corner of the test box
-    WIDTH, HEIGHT = 700, 950
+    WIDTH, HEIGHT = 2045, 2048
 
     print('Getting config from Configuration instantiation...\n')
-    config = Configuration(info="",
-                           model=CNN1,
-                           volume_dataset_cls=SampleXYZ,
-                           crop_box_cls=CropBoxSobol,
-                           label_fn=centre_pixel,
-                           training_steps=1_000,  # If caching, this should be small enough to fit on disk
-                           batch_size=32,
-                           fragments=[1, 2, 3],
-                           test_box=(XL, YL, XL + WIDTH, YL + HEIGHT),  # Hold back rectangle
-                           test_box_fragment=1,  # Hold back fragment
-                           box_width_xy=61,
-                           box_width_z=8,
-                           balance_ink=True,
-                           shuffle=True,
-                           group_pixels=False,
-                           num_workers=min(1, mp.cpu_count() - 1),
-                           prefix='/data/kaggle/vesuvius/train/',
-                           suffix_cache='sobol',
-                           collate_fn=None)
+    config1 = Configuration(info="",
+                            model=HybridModel1,
+                            volume_dataset_cls=SampleXYZ,
+                            crop_box_cls=CropBoxSobol,
+                            label_fn=centre_pixel,
+                            training_steps=100_000,  # If caching, this should be small enough to fit on disk
+                            batch_size=32,
+                            fragments=[1, 2, 3],
+                            test_box=(XL, YL, XL + WIDTH, YL + HEIGHT),  # Hold back rectangle
+                            test_box_fragment=1,  # Hold back fragment
+                            box_width_xy=61,
+                            box_width_z=6,
+                            balance_ink=True,
+                            shuffle=True,
+                            group_pixels=False,
+                            num_workers=min(1, mp.cpu_count() - 1),
+                            prefix='/data/kaggle/vesuvius/train/',
+                            suffix_cache='sobol',
+                            collate_fn=None)
 
-config_regular_z = copy.copy(config)
-config_regular_z.suffix_cache = 'regular'
-config_regular_z.crop_box_cls = CropBoxRegular
-config_regular_z.shuffle = False
-config_regular_z.group_pixels = True
-config_regular_z.balance_ink = False
-config_regular_z.sampling = 5
-config_regular_z.stride_xy = 61
-config_regular_z.stride_z = 6
+
+def get_train2_config(config) -> Configuration:
+    cfg = copy.copy(config)
+    cfg.suffix_cache = 'regular'
+    cfg.crop_box_cls = CropBoxRegular
+    # Keep shuffle = False, so the dataloader does not shuffle, to ensure you get all the z bins for each (x, y).
+    # The data will already be shuffled w.r.t. (x, y), per fragment. The cached dataset will be completely shuffled.
+    cfg.shuffle = False
+    cfg.group_pixels = True
+    cfg.balance_ink = True
+    cfg.sampling = 5  # TODO: delete this?
+    cfg.stride_xy = 61
+    cfg.stride_z = 6
+    return cfg
 
 
 # Training
+
+
+def train_loaders(cfg) -> Generator[Datapoint, None, None]:
+    for epoch in range(EPOCHS):
+        reset_cache = CACHED_DATA and (epoch != 0 and epoch % RESET_CACHE_EPOCH_INTERVAL == 0)
+        reset_cache = reset_cache or (epoch == 0 and FORCE_CACHE_RESET)
+        yield from get_train_loader(cfg, cached=CACHED_DATA, reset_cache=reset_cache)
 
 
 class BaseTrainer(ABC):
 
     def __init__(self, config, model, learning_rate, device):
         self.config = config
-        self.model = model
+        self.model = model.to(device)
         self.learning_rate = learning_rate
         self.device = device
         self.incrementer = Incrementer()
@@ -198,38 +254,35 @@ class BaseTrainer(ABC):
         self.total = EPOCHS * self.config.training_steps // self.config.batch_size
 
     @abstractmethod
-    def get_criterion(self):
+    def get_criterion(self) -> nn.Module:
         ...
 
     @abstractmethod
-    def get_scheduler(self, optimizer, total):
+    def get_scheduler(self, optimizer, total) -> Any:
         ...
 
     @abstractmethod
-    def get_optimizer(self):
+    def get_optimizer(self) -> Optimizer:
         ...
 
     @abstractmethod
-    def process_model_output(self, datapoint):
+    def process_model_output(self, datapoint) -> torch.Tensor:
         ...
 
-    def train_loaders(self):
-        for epoch in range(EPOCHS):
-            reset_cache = CACHED_DATA and (epoch != 0 and epoch % RESET_CACHE_EPOCH_INTERVAL == 0)
-            reset_cache = reset_cache or (epoch == 0 and FORCE_CACHE_RESET)
-            yield from get_train_loader(self.config, cached=CACHED_DATA, reset_cache=reset_cache)
+    def train_loaders(self) -> Generator[Datapoint, None, None]:
+        yield from train_loaders(self.config)
 
-    def validate(self, dataloader, criterion, i):
+    def validate(self, dataloader, criterion, i) -> None:
         self.model.eval()
         with torch.no_grad():
-            for datapoint_test in islice(dataloader, 5):
+            for datapoint_test in islice(dataloader, 20):
                 outputs = self.process_model_output(datapoint_test)
                 val_loss = criterion(outputs, datapoint_test.label.float().to(self.device))
                 self.logger_test_loss.update(val_loss.item(), len(datapoint_test.voxels))
         self.logger_test_loss.update(val_loss.item(), len(datapoint_test.voxels))
         self.logger_test_loss.log(i)
 
-    def train(self, dataloader, criterion, optimizer, scheduler, validate_fn):
+    def train(self, dataloader, criterion, optimizer, scheduler, validate_fn) -> None:
         self.model.train()
         tqdm_kwargs = dict(total=self.total, disable=False, desc='Training', position=0)
         for datapoint in tqdm(dataloader, **tqdm_kwargs):
@@ -245,24 +298,23 @@ class BaseTrainer(ABC):
 
             self.logger_loss.update(loss.item(), len(datapoint.voxels))
             self.logger_lr.update(scheduler.get_last_lr()[0], 1)
-            self.incrementer.increment()
+            self.incrementer.increment(len(outputs))
 
             if self.incrementer.value == 0:
                 continue
 
             if self.incrementer.value % SAVE_INTERVAL == 0:
-                self.saver.model(model)
-                self.saver.config(config)
+                self.saver.model(model1)
+                self.saver.config(config1)
 
-            if not (self.incrementer.value % VALIDATE_INTERVAL == 0):
-                continue
+            if self.incrementer.value % LOG_INTERVAL == 0:
+                self.logger_loss.log(self.incrementer.value)
+                self.logger_lr.log(self.incrementer.value)
 
-            validate_fn(self.incrementer.value)
-            self.logger_loss.log(self.incrementer.value)
-            self.logger_lr.log(self.incrementer.value)
-            validate_fn(self.incrementer.value)
+            if self.incrementer.value % VALIDATE_INTERVAL == 0:
+                validate_fn(self.incrementer.value)
 
-    def run(self):
+    def run(self) -> None:
         train_loader_sobol = self.train_loaders()
         test_loader_sobol = get_test_loader(self.config)
 
@@ -280,21 +332,27 @@ class BaseTrainer(ABC):
                                            'loss/test': self.logger_test_loss.average,
                                            'steps': self.incrementer.value}
 
-    def test_model(self):
+    def validate_model(self) -> None:
         rnd_vals = torch.randn(self.config.batch_size,
                                1,
                                self.config.box_width_z,
                                self.config.box_width_xy,
                                self.config.box_width_xy).to(DEVICE)
         print(f'Shape of sample batches: {rnd_vals.shape}', '\n')
-        self.model.forward(rnd_vals)
+        try:
+            self.model.eval()
+            with torch.no_grad():
+                self.model.forward(rnd_vals)
+        except RuntimeError as e:
+            raise RuntimeError(f'{e}\n'
+                               'Model is not compatible with the input data size')
 
     def __enter__(self):
         pp.pprint(self.config)
         print()
-        print(model)
+        print(self.model)
         print()
-        self.test_model()
+        self.validate_model()
         self.time_start = timer()
         return self
 
@@ -308,7 +366,7 @@ class BaseTrainer(ABC):
         self.writer.flush()
         self.writer.close()
 
-    def __str__(self):
+    def __str__(self) -> str:
         if self.time_start is not None:
             time_end = timer()
             time_spent = time_end - self.time_start
@@ -319,21 +377,44 @@ class BaseTrainer(ABC):
 
 class Trainer1(BaseTrainer):
 
-    def get_criterion(self):
+    def get_criterion(self) -> nn.Module:
         return nn.BCELoss()
 
-    def get_scheduler(self, optimizer, total):
+    def get_scheduler(self, optimizer, total) -> Any:
         return torch.optim.lr_scheduler.OneCycleLR(optimizer, max_lr=self.learning_rate, total_steps=total)
 
-    def get_optimizer(self):
+    def get_optimizer(self) -> Optimizer:
         return optim.SGD(self.model.parameters(), lr=self.learning_rate)
 
-    def process_model_output(self, datapoint):
+    def process_model_output(self, datapoint) -> torch.Tensor:
         return self.model(datapoint.voxels.to(self.device))
 
 
+class TrainerScalar1(Trainer1):
+
+    def validate_model(self) -> None:
+        rnd_vals = torch.randn(self.config.batch_size,
+                               self.config.box_width_z,
+                               self.config.box_width_xy,
+                               self.config.box_width_xy).to(DEVICE)
+        print(f'Shape of sample batches: {rnd_vals.shape}', '\n')
+        try:
+            scalar_input = torch.tensor([2.0] * self.config.batch_size).to(self.device).view(-1, 1).to(self.device)
+            self.model.eval()
+            with torch.no_grad():
+                self.model.forward(rnd_vals, scalar_input)
+        except RuntimeError as e:
+            raise RuntimeError(f'{e}\n'
+                               'Model is not compatible with the input data size')
+
+    def process_model_output(self, datapoint) -> torch.Tensor:
+        return self.model(datapoint.voxels.to(self.device),
+                          datapoint.z_start.view(-1, 1).float().to(self.device))
+
+
 if __name__ == '__main__':
-    model = config.model().to(DEVICE)
-    with Trainer1(config, model, 0.03, DEVICE) as trainer1:
+    print('Tensorboard URL: ', tensorboard_access.get_public_url(), '\n')
+    model1 = config1.model(channels=config1.box_width_z)
+    with TrainerScalar1(config1, model1, 0.03, DEVICE) as trainer1:
         trainer1.run()
     print(trainer1)

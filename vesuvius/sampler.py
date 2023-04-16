@@ -8,10 +8,6 @@ from scipy.stats import qmc
 
 from vesuvius.utils import vectorise_raster, check_points_in_polygon
 
-try:
-    from typing import Protocol
-except ImportError:
-    from typing_extensions import Protocol
 
 sys.setrecursionlimit(50_000)
 
@@ -88,10 +84,10 @@ class CropBoxSobol(BaseCropBox):
     def get_sample(self) -> Tuple[int, int, int]:
         return tuple(self.sampler.integers(l_bounds=self.l_bounds, u_bounds=self.u_bounds)[0])
 
-    def __getitem__(self, item):
+    def __getitem__(cls, item):
         raise NotImplementedError("Sobol sampler does not support indexing")
 
-    def __len__(self):
+    def __len__(cls):
         raise NotImplementedError("Sobol sampler does not support len")
 
 
@@ -263,7 +259,7 @@ class VolumeSamplerRegularZ(BaseVolumeSampler):
         self.crop_box.sampler = self.reduce_samples(self.crop_box.sampler)
 
     def reduce_samples(self, crop_box_sampler):
-        """Reduce the number of samples to the number of pixels in the mask"""
+        """Reduce the number of samples to (approximately) the number of pixels in the mask"""
         mask_poly = vectorise_raster(self.ds.mask.values).simplify(200).buffer(self.box_width)
         # self.plot_mask(mask_poly)
         xy_points = list(zip(*list(zip(*crop_box_sampler))[:2]))

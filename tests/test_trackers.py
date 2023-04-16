@@ -1,6 +1,6 @@
 import pytest
 from torch.utils.tensorboard import SummaryWriter
-from vesuvius.trackers import BaseTracker, TrackerAvg
+from vesuvius.trackers import TrackerAvg
 
 
 def test_TrackerAvg_update():

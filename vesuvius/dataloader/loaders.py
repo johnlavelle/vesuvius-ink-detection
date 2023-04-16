@@ -17,15 +17,10 @@ from vesuvius.config import Configuration
 from vesuvius.data_io import dataset_to_zarr
 from vesuvius.data_io import read_dataset_from_zarr, SaveModel
 from vesuvius.datapoints import Datapoint
-from vesuvius.scroll_dataset import CachedDataset
-from vesuvius.sampler import CropBoxSobol, CropBoxRegular
+from vesuvius.fragment_dataset import CachedDataset
+from vesuvius.sampler import CropBoxSobol
 
-from . import scroll_datasets
-
-try:
-    from typing import Protocol
-except ImportError:
-    from typing_extensions import Protocol
+from . import fragment_datasets
 
 worker_seed = None
 
@@ -54,8 +49,8 @@ worker_init_fns = {
 
 
 def standard_data_loader(cfg: Configuration, worker_init='diff') -> DataLoader:
-    xarray_dataset_iter = scroll_datasets.XarrayDatasetIter(cfg)
-    datasets = scroll_datasets.TorchDatasetIter(cfg, xarray_dataset_iter)
+    xarray_dataset_iter = fragment_datasets.XarrayDatasetIter(cfg)
+    datasets = fragment_datasets.TorchDatasetIter(cfg, xarray_dataset_iter)
     datasets = ConcatDataset(datasets)
     return DataLoader(datasets,
                       batch_size=cfg.batch_size,
@@ -66,22 +61,17 @@ def standard_data_loader(cfg: Configuration, worker_init='diff') -> DataLoader:
 
 
 def cached_data_loader(cfg: Configuration, reset_cache: bool = False) -> Dataset:
-    cache_dir = os.path.join(cfg.prefix, 'data_cache')
-    zarr_dir = os.path.join(cache_dir, f'cache_{cfg.suffix_cache}.zarr')
-    cfg_path = os.path.join(cache_dir, f"config_{cfg.suffix_cache}.json")
+    cache_dir = os.path.join(cfg.prefix, f'data_cache_{cfg.suffix_cache}')
+    zarr_dir = os.path.join(cache_dir, f'cache.zarr')
 
     if reset_cache:
-        shutil.rmtree(zarr_dir, ignore_errors=True)
-        try:
-            os.remove(cfg_path)
-        except FileNotFoundError:
-            pass
+        shutil.rmtree(cache_dir, ignore_errors=True)
 
     if not os.path.isdir(zarr_dir):
         os.makedirs(cache_dir, exist_ok=True)
 
         train_loader = get_train_loader(cfg)
-        saver = SaveModel()
+        saver = SaveModel(cache_dir)
 
         # Save the output of the data loader to a zarr file
 
@@ -97,7 +87,7 @@ def cached_data_loader(cfg: Configuration, reset_cache: bool = False) -> Dataset
             sub_volume_len = datapoint.voxels.shape[0]
             sub_volume_coord = np.arange(running_sample_len, running_sample_len + sub_volume_len)
             coords = {'sample': sub_volume_coord}
-            voxels_da = xr.DataArray(datapoint.voxels.numpy(), dims=('sample', 'empty', 'z', 'x', 'y'), coords=coords)
+            voxels_da = xr.DataArray(datapoint.voxels.numpy(), dims=('sample', 'z', 'x', 'y'), coords=coords)
             label_da = xr.DataArray(datapoint.label, dims=('sample', 'empty'), coords=coords)
             samples_labels = {'voxels': voxels_da, 'label': label_da}
             dp = datapoint._asdict()
@@ -118,7 +108,6 @@ def cached_data_loader(cfg: Configuration, reset_cache: bool = False) -> Dataset
             dataset_to_zarr(ds, zarr_dir, 'sample')
             running_sample_len += sub_volume_len
         saver.config(cfg)
-        shutil.move(saver.path, cache_dir)
     return CachedDataset(zarr_dir, cfg.batch_size, group_pixels=cfg.group_pixels)
 
 

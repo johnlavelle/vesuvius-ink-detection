@@ -2,10 +2,6 @@ from typing import Tuple
 
 from vesuvius.data_io import read_dataset_from_zarr
 
-try:
-    from typing import Protocol
-except ImportError:
-    from typing_extensions import Protocol
 
 worker_seed = None
 

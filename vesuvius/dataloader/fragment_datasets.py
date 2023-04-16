@@ -4,14 +4,9 @@ import xarray as xr
 
 from vesuvius.config import Configuration
 from vesuvius.data_io import read_dataset_from_zarr
-from vesuvius.scroll_dataset import BaseDataset
+from vesuvius.fragment_dataset import BaseDataset
 from vesuvius.utils import get_hold_back_mask
 from .weightings import WeightedSamples
-
-try:
-    from typing import Protocol
-except ImportError:
-    from typing_extensions import Protocol
 
 
 class DatasetIter(ABC):

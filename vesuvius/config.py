@@ -1,10 +1,12 @@
 import multiprocessing as mp
+import warnings
+
 from torch.nn import Module
 from dataclasses import dataclass, field
 from typing import Union, Optional, Callable, List, Tuple, Any, Type
 
 from vesuvius.sampler import BaseCropBox
-from vesuvius.scroll_dataset import BaseDataset
+from vesuvius.fragment_dataset import BaseDataset
 
 
 @dataclass
@@ -52,17 +54,29 @@ class Configuration:
             self.extra_dict = {}
         assert self.test_box_fragment in self.fragments, "Test box fragment must be in fragments"
 
+        cb = self.crop_box_cls(total_bounds=(0, 0, 0, 0, 0, 0), width_xy=0, width_z=0)
+        if (self.stride_xy is not None) or (self.stride_z is not None):
+            self.__crop_box_has_getitem(cb, "Strides are not supported for this crop_box_cls")
+        if self.group_pixels:
+            raise self.__crop_box_has_getitem(cb, "group_pixels == True is not supported for this crop_box_cls")
+        if self.shuffle:
+            try:
+                self.__crop_box_has_getitem(cb, "shuffle == True is not supported for this crop_box_cls")
+                warnings.warn("Set shuffle == False, to all windows across z, for each x, y.")
+            except NotImplementedError:
+                pass
+
+    def __crop_box_has_getitem(self, crop_box, error_message):
+        try:
+            crop_box.__getitem__(None)
+        except NotImplementedError:
+            raise NotImplementedError(error_message)
+
     def __getitem__(self, key: str):
         return getattr(self, key)
 
     def __setitem__(self, key: str, value: Any):
         setattr(self, key, value)
-
-
-def get_fully_qualified_name(obj: Any) -> str:
-    module = obj.__module__
-    name = obj.__name__
-    return f"{module}.{name}"
 
 
 def serialize(obj: Any) -> Any:

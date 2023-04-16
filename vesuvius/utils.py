@@ -73,8 +73,9 @@ class Incrementer:
     def __init__(self, start=0):
         self.counter = start
 
-    def increment(self):
-        self.counter += 1
+    def increment(self, batch_size=1):
+        self.counter += batch_size
+
 
     @property
     def value(self):
