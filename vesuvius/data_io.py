@@ -31,7 +31,7 @@ def read_tiffs(fragment: int, prefix: str) -> xr.Dataset:
     with warnings.catch_warnings():
         warnings.simplefilter("ignore")
         tiff_fnames = sorted(glob.glob(join(prefix, fragment, 'surface_volume/*.tif')))
-        ds = xr.open_mfdataset(tiff_fnames, concat_dim='band', combine='nested', parallel=True).transpose('y', 'x',
+        ds = xr.open_mfdataset(tiff_fnames, concat_dim='band', combine='nested', parallel=False).transpose('y', 'x',
                                                                                                           'band')
         ds = ds.rename({'band_data': 'images'})
         labels_ink = xr.open_dataset(join(prefix, fragment, "inklabels.png")).squeeze()
