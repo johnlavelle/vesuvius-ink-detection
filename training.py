@@ -182,7 +182,7 @@ if READ_CONFIG_FILE:
     config1 = loader.config
 else:
     # Hold back data test box for fragment
-    XL, YL = 1100, 3500  # lower left corner of the test box
+    XL, YL = 2048, 7168  # lower left corner of the test box
     WIDTH, HEIGHT = 2045, 2048
 
     print('Getting config from Configuration instantiation...\n')
@@ -195,7 +195,7 @@ else:
                             batch_size=32,
                             fragments=[1, 2, 3],
                             test_box=(XL, YL, XL + WIDTH, YL + HEIGHT),  # Hold back rectangle
-                            test_box_fragment=1,  # Hold back fragment
+                            test_box_fragment=2,  # Hold back fragment
                             box_width_xy=61,
                             box_width_z=6,
                             balance_ink=True,

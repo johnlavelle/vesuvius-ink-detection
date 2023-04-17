@@ -137,7 +137,7 @@ def get_test_loader(cfg: Configuration) -> DataLoader:
                                           max_iterations=cfg.training_steps,
                                           crop_cls=CropBoxSobol,
                                           label_operation=cfg.label_fn,
-                                          balance_ink=False,
+                                          balance_ink=cfg.balance_ink,
                                           stride_xy=cfg.stride_xy,
                                           stride_z=cfg.stride_z)
     return DataLoader(test_dataset, batch_size=cfg.batch_size, shuffle=False, num_workers=cfg.num_workers)
