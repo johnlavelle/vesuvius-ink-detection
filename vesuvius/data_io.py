@@ -6,7 +6,12 @@ import warnings
 from dataclasses import asdict
 from os.path import join
 from typing import Any
-from typing import Dict, Union, Literal
+from typing import Dict, Union
+try:
+    from typing import Literal
+except ImportError:
+    from typing_extensions import Literal
+
 
 import dask
 import numpy as np
