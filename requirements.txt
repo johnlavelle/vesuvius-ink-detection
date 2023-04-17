@@ -14,7 +14,7 @@ scikit-image==0.20.0
 scikit-learn==1.2.1
 scipy
 shapely
-skimage==0.0
+scikit-image
 tblib==1.7.0
 tensorboard-data-server==0.7.0
 tensorboard-plugin-wit==1.8.1
