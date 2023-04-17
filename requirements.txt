@@ -1,5 +1,5 @@
-click==8.0.3
-dask==2023.3.2
+click
+dask
 matplotlib
 numpy
 pandas
