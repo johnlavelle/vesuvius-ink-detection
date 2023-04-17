@@ -79,7 +79,7 @@ class CropBoxSobol(BaseCropBox):
         self.u_bounds = np.array([self.bounds[3] - (self.width_xy - 2),
                                   self.bounds[4] - (self.width_xy - 2),
                                   self.bounds[5] - (self.width_z - 2)])
-        self.sampler = qmc.Sobol(d=3, scramble=True, optimization=None, seed=seed)
+        self.sampler = qmc.Sobol(d=3, scramble=True, seed=seed)
 
     def get_sample(self) -> Tuple[int, int, int]:
         return tuple(self.sampler.integers(l_bounds=self.l_bounds, u_bounds=self.u_bounds)[0])
