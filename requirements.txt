@@ -6,9 +6,6 @@ pandas
 pytest
 rasterio
 rioxarray
-scikit-cuda
-scikit-image
-scikit-learn
 scipy
 shapely
 tblib
