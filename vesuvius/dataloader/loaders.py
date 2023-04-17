@@ -135,7 +135,7 @@ def get_test_loader(cfg: Configuration) -> DataLoader:
                                           cfg.box_width_xy,
                                           cfg.box_width_z,
                                           max_iterations=cfg.training_steps,
-                                          crop_cls=CropBoxSobol,
+                                          crop_cls=cfg.crop_box_cls,
                                           label_operation=cfg.label_fn,
                                           balance_ink=cfg.balance_ink,
                                           stride_xy=cfg.stride_xy,

@@ -36,3 +36,5 @@ class TrackerAvg(BaseTracker):
 
     def log(self, iteration: int) -> None:
         self.summary_writer.add_scalar(self.tag, self.average, iteration)
+        self.value = 0.0
+        self.i = 0
