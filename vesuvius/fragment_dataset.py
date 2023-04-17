@@ -49,7 +49,7 @@ class BaseDataset(ABC, Dataset):
     def get_datapoint(self, index: int) -> Datapoint:
         ...
 
-    @lru_cache
+    @lru_cache(maxsize=None)
     def get_sampler(self, seed) -> VolumeSamplerRndXYZ:
         return self.volume_sampler_cls(self.ds,
                                        self.box_width_xy,
