@@ -17,14 +17,14 @@ def test_TrackerAvg_update():
         total_loss += loss * batch_size
         total_items += batch_size
         assert tracker.value == total_loss
-        assert tracker.i == total_items
+        assert tracker.running_total == total_items
         assert tracker.average == total_loss / total_items
 
 
 def test_TrackerAvg_log(mocker):
     tracker = TrackerAvg(tag="test_loss", summary_writer=SummaryWriter())
     tracker.value = 100.0
-    tracker.i = 10
+    tracker.running_total = 10
 
     mocker.spy(tracker.summary_writer, "add_scalar")
 

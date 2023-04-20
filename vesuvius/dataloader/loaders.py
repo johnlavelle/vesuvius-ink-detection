@@ -75,7 +75,7 @@ def cached_data_loader(cfg: Configuration, reset_cache: bool = False) -> Dataset
 
         # Save the output of the data loader to a zarr file
 
-        total = cfg.training_steps / cfg.batch_size
+        total = cfg.training_steps // cfg.batch_size
         running_sample_len = 0
         datapoint: Datapoint
         for i, datapoint in tqdm(enumerate(train_loader), total=total,
@@ -87,7 +87,7 @@ def cached_data_loader(cfg: Configuration, reset_cache: bool = False) -> Dataset
             sub_volume_len = datapoint.voxels.shape[0]
             sub_volume_coord = np.arange(running_sample_len, running_sample_len + sub_volume_len)
             coords = {'sample': sub_volume_coord}
-            voxels_da = xr.DataArray(datapoint.voxels.numpy(), dims=('sample', 'z', 'x', 'y'), coords=coords)
+            voxels_da = xr.DataArray(datapoint.voxels.numpy(), dims=('sample', 'empty', 'z', 'x', 'y'), coords=coords)
             label_da = xr.DataArray(datapoint.label, dims=('sample', 'empty'), coords=coords)
             samples_labels = {'voxels': voxels_da, 'label': label_da}
             dp = datapoint._asdict()

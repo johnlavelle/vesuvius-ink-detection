@@ -1,4 +1,3 @@
-# Use the kaggle/python image as the base
 FROM kaggle/python
 
 # Install ngrok

@@ -5,13 +5,14 @@ import os
 import warnings
 from dataclasses import asdict
 from os.path import join
+
 from typing import Any
 from typing import Dict, Union
+
 try:
     from typing import Literal
 except ImportError:
     from typing_extensions import Literal
-
 
 import dask
 import numpy as np
@@ -60,7 +61,11 @@ def dataset_to_zarr(dataset: xr.Dataset, zarr_path: str, append_dim: str) -> Non
 
     dataset['voxels'] = dataset['voxels'].chunk(dataset['voxels'].shape)
     dataset['label'] = dataset['label'].chunk(dataset['label'].shape)
-    dataset.to_zarr(zarr_path, mode=mode, encoding=encodings_, consolidated=True, compute=True, append_dim=append_dim)
+    try:
+        dataset.to_zarr(zarr_path, mode=mode, encoding=encodings_, consolidated=True, compute=True,
+                        append_dim=append_dim)
+    except ValueError:
+        print('Skipping', zarr_path)
 
 
 def save_zarr(fragment: int, prefix: str, normalize=True) -> str:
@@ -157,7 +162,3 @@ class LoadModel:
 
     def config(self) -> Configuration:
         return self._config
-
-
-
-

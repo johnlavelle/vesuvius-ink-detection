@@ -69,27 +69,3 @@ def check_points_in_polygon(points, polygon_coords):
     return points_df
 
 
-class Incrementer:
-    def __init__(self, start=0):
-        self.counter = start
-
-    def increment(self, batch_size=1):
-        self.counter += batch_size
-
-
-    @property
-    def value(self):
-        return self.counter
-
-    def __eq__(self, other):
-        if isinstance(other, int):
-            return self.counter == other
-        if isinstance(other, Incrementer):
-            return self.counter == other.counter
-        return False
-
-    def __str__(self):
-        return f"Value: {self.counter}"
-
-    def __repr__(self):
-        return f"Incrementer(start={self.counter})"
