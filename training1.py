@@ -1,14 +1,7 @@
 import copy
-import json
 import multiprocessing as mp
-import os
 import pprint
-import time
-from abc import ABC, abstractmethod
-from itertools import islice
-from timeit import default_timer as timer
-from typing import Generator, Any, Iterator
-import gc
+from typing import Generator, Any
 
 import dask
 import numpy as np
@@ -17,18 +10,16 @@ import torch.nn.functional as F
 import torch.optim as optim
 from torch import nn as nn
 from torch.optim.optimizer import Optimizer
-from torch.utils.tensorboard import SummaryWriter
-from tqdm import tqdm
 from xarray import DataArray
 
 import tensorboard_access
-from vesuvius.config import Configuration
-from vesuvius.data_io import SaveModel
+from vesuvius.config import Configuration1
 from vesuvius.dataloader import get_train_loader, get_test_loader
 from vesuvius.datapoints import Datapoint, DatapointTuple
 from vesuvius.fragment_dataset import BaseDataset
 from vesuvius.sampler import CropBoxSobol, CropBoxRegular
-from vesuvius.trackers import TrackerAvg, Incrementer
+from vesuvius.trainer import TrainingResources, BaseTrainer
+from vesuvius.utils import timer
 
 # If READ_EXISTING_CONFIG is False, config is specified in Configuration (below)
 # else config is read from CONFIG_PATH.
@@ -253,7 +244,7 @@ class FocalLoss(nn.Module):
 #                             collate_fn=None)
 
 
-def get_train2_config(config) -> Configuration:
+def get_train2_config(config) -> Configuration1:
     cfg = copy.copy(config)
     cfg.suffix_cache = 'regular'
     cfg.crop_box_cls = CropBoxRegular
@@ -271,149 +262,20 @@ def get_train2_config(config) -> Configuration:
 # Training
 
 
-def train_loaders(cfg) -> Generator[Datapoint, None, None]:
+def get_train_loaders(cfg) -> Generator[Datapoint, None, None]:
     for epoch in range(EPOCHS):
         reset_cache = CACHED_DATA and (epoch != 0 and epoch % RESET_CACHE_EPOCH_INTERVAL == 0)
         reset_cache = reset_cache or (epoch == 0 and FORCE_CACHE_RESET)
         yield from get_train_loader(cfg, cached=CACHED_DATA, reset_cache=reset_cache)
 
 
-class BaseTrainer(ABC):
-
-    def __init__(self,
-                 epochs: int = 1,
-                 learning_rate: float = 0.03,
-                 l1_lambda: float = 0.001,
-                 criterion_kwargs: dict = None,
-                 model_kwargs: dict = None,
-                 config_kwargs: dict = None) -> None:
-
-        self.learning_rate = learning_rate
-        self.l1_lambda = l1_lambda
-        if criterion_kwargs is None:
-            criterion_kwargs = {}
-        if model_kwargs is None:
-            model_kwargs = {}
-        if config_kwargs is None:
-            config_kwargs = {}
-
-        self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-
-        current_time = time.strftime("%Y-%m-%d_%H-%M-%S")
-        log_subdir = os.path.join("output/runs", current_time)
-        self.saver = SaveModel(log_subdir, 1)
-        os.makedirs(log_subdir, exist_ok=True)
-        self.writer = SummaryWriter(log_subdir, flush_secs=60)
-        self.incrementer = Incrementer()
-        self.logger_loss = TrackerAvg('loss/train', self.writer)
-        self.logger_test_loss = TrackerAvg('loss/test', self.writer)
-        self.logger_lr = TrackerAvg('stats/lr', self.writer)
-
-        self.config = self.get_config(**config_kwargs)
-        self.model = self.config.model(**model_kwargs).to(self.device)
-        self.batch_size = self.config.batch_size
-        self.total = epochs * self.config.training_steps
-        self.loops = self.total // self.batch_size
-        self.check_model()
-        pp.pprint(self.config)
-        print()
-
-        self.optimizer = self.get_optimizer()
-        self.scheduler = self.get_scheduler(self.optimizer, self.loops)
-        self.criterion = self.get_criterion(**criterion_kwargs)
-        self.criterion_val = nn.BCEWithLogitsLoss()
-
-        self.train_loader_iter = self.train_loaders()
-        self.test_loader_iter = get_test_loader(self.config)
-
-    @abstractmethod
-    def get_criterion(self, **kwargs) -> nn.Module:
-        ...
-
-    @abstractmethod
-    def get_scheduler(self, optimizer, total) -> Any:
-        ...
-
-    @abstractmethod
-    def get_optimizer(self) -> Optimizer:
-        ...
-
-    @abstractmethod
-    def process_model_output(self, datapoint) -> torch.Tensor:
-        ...
-
-    @abstractmethod
-    def check_model(self) -> None:
-        ...
-
-    @staticmethod
-    @abstractmethod
-    def get_config(**kwargs) -> Configuration:
-        ...
-
-    @abstractmethod
-    def train_loaders(self) -> Generator[Datapoint, None, None]:
-        ...
-
-    @abstractmethod
-    def validate(self, i) -> None:
-        ...
-
-    @abstractmethod
-    def get_loss(self) -> float:
-        ...
-
-    def loss_generator(self) -> Iterator[float]:
-        while self.incrementer.loop < self.loops:
-            yield self.get_loss()
-
-    def __next__(self) -> float:
-        if self.incrementer.loop >= self.loops:
-            raise StopIteration
-        return self.get_loss()
-
-    def __iter__(self):
-        tqdm_kwargs = dict(total=self.loops, disable=False, desc='Training', position=0)
-        yield from tqdm(self.loss_generator(), **tqdm_kwargs)
-
-    def __enter__(self):
-        self.time_start = timer()
-        return self
-
-    def __exit__(self, exc_type, exc_val, exc_tb):
-        self.config.update_nn_kwargs(self.optimizer, self.scheduler, self.criterion, self.learning_rate, EPOCHS)
-        self.config['performance_dict'] = {'loss/train': self.logger_loss.average,
-                                           'loss/test': self.logger_test_loss.average,
-                                           'steps': self.incrementer.count}
-
-        self.saver.model(self.model)
-        json_file_path = self.saver.config(self.config)
-        with open(json_file_path, 'r') as file:
-            data = json.load(file)
-        config_json = json.dumps(data, indent=4)
-        self.writer.add_text('config', config_json)
-        self.writer.flush()
-        self.writer.close()
-
-        torch.cuda.empty_cache()
-        gc.collect()
-
-    def __str__(self) -> str:
-        if self.time_start is not None:
-            time_end = timer()
-            time_spent = time_end - self.time_start
-            return f"Training took {time_spent:.1f} seconds"
-        else:
-            return "Training not started"
-
-
-class TrainerScalar1(BaseTrainer):
+class TrainerHybrid1(BaseTrainer):
 
     def __init__(self, *args, **kwargs) -> None:
         super().__init__(*args, **kwargs)
 
     @staticmethod
-    def get_config(**kwargs):
+    def get_config(**kwargs) -> Configuration1:
         xl, yl = 2048, 7168  # lower left corner of the test box
         width, height = 2045, 2048
         default_config = dict(info="",
@@ -435,60 +297,7 @@ class TrainerScalar1(BaseTrainer):
                               prefix='/data/kaggle/input/vesuvius-challenge-ink-detection/train/',
                               suffix_cache='sobol',
                               collate_fn=None)
-        return Configuration(**{**default_config, **kwargs})
-
-    def train_loaders(self) -> Generator[Datapoint, None, None]:
-        yield from train_loaders(self.config)
-
-    def validate(self, i) -> None:
-        for datapoint_test in islice(self.train_loaders(), 20):
-            outputs = self.process_model_output(datapoint_test)
-            val_loss = self.criterion_val(outputs, datapoint_test.label.float().to(self.device))
-            self.logger_test_loss.update(val_loss.item(), len(datapoint_test.voxels))
-        self.logger_test_loss.log(i)
-
-    def get_loss(self) -> float:
-        if self.incrementer.loop == self.loops:
-            raise StopIteration
-
-        datapoint = next(self.train_loader_iter)
-
-        self.model.train()
-
-        self.optimizer.zero_grad()
-
-        outputs = self.process_model_output(datapoint)
-        target = datapoint.label.float().to(self.device)
-        base_loss = self.criterion(outputs, target)
-        l1_regularization = torch.norm(self.model.fc_scalar.weight, p=1)
-        loss = base_loss + (self.l1_lambda * l1_regularization)
-        loss.backward()
-        self.optimizer.step()
-        self.scheduler.step()
-
-        self.logger_loss.update(loss.item(), len(datapoint.voxels))
-        self.logger_lr.update(self.scheduler.get_last_lr()[0], 1)
-        self.incrementer.increment(len(outputs))
-
-        if self.incrementer.loop != 0:
-            if self.incrementer.loop % SAVE_INTERVAL == 0:
-                self.saver.model(self.model)
-                self.saver.config(self.config)
-
-            if self.incrementer.loop % LOG_INTERVAL == 0:
-                self.logger_loss.log(self.incrementer.count)
-                self.logger_lr.log(self.incrementer.count)
-
-            if self.incrementer.loop % VALIDATE_INTERVAL == 0:
-                try:
-                    self.model.eval()
-                    with torch.no_grad():
-                        self.validate(self.incrementer.count)
-                    self.model.train()
-                except AttributeError:
-                    print('Validation code not compatible with this version of Python')
-
-        return loss.item()
+        return Configuration1(**{**default_config, **kwargs})
 
     def get_criterion(self, **kwargs) -> nn.Module:
         return FocalLoss(**kwargs)
@@ -498,6 +307,59 @@ class TrainerScalar1(BaseTrainer):
 
     def get_optimizer(self) -> Optimizer:
         return optim.SGD(self.model.parameters(), lr=self.learning_rate)
+
+    def validate(self, i) -> None:
+        for datapoint_test in self.test_loader_iter:
+            outputs = self.forward(datapoint_test)
+            val_loss = self.criterion_val(outputs, datapoint_test.label.float().to(self.device))
+            self.resource.logger_test_loss.update(val_loss.item(), len(datapoint_test.voxels))
+        self.resource.logger_test_loss.log(i)
+
+    def forward(self, datapoint) -> torch.Tensor:
+        scalar = (datapoint.z_start / (65 - self.config.box_width_z)).view(-1, 1).float()
+        return self.model(datapoint.voxels.to(self.device), scalar.to(self.device))
+
+    def get_loss(self, compute_loss=True) -> torch.Tensor:
+        if self.resource.incrementer.loop == self.loops:
+            raise StopIteration
+
+        datapoint = next(self.train_loader_iter)
+        self.model.train()
+        self.optimizer.zero_grad()
+        outputs = self.forward(datapoint)
+
+        if compute_loss:
+            target = datapoint.label.float().to(self.device)
+            base_loss = self.criterion(outputs, target)
+            l1_regularization = torch.norm(self.model.fc_scalar.weight, p=1)
+            loss = base_loss + (self.l1_lambda * l1_regularization)
+            loss.backward()
+            self.optimizer.step()
+            self.scheduler.step()
+
+            self.resource.logger_loss.update(loss.item(), len(datapoint.voxels))
+            self.resource.logger_lr.update(self.scheduler.get_last_lr()[0], 1)
+            self.resource.incrementer.increment(len(outputs))
+
+            if self.resource.incrementer.loop != 0:
+                if self.resource.incrementer.loop % SAVE_INTERVAL == 0:
+                    self.resource.saver.model(self.model)
+                    self.resource.saver.config(self.config)
+
+                if self.resource.incrementer.loop % LOG_INTERVAL == 0:
+                    self.resource.logger_loss.log(self.resource.incrementer.count)
+                    self.resource.logger_lr.log(self.resource.incrementer.count)
+
+                if self.resource.incrementer.loop % VALIDATE_INTERVAL == 0:
+                    try:
+                        self.model.eval()
+                        with torch.no_grad():
+                            self.validate(self.resource.incrementer.count)
+                        self.model.train()
+                    except AttributeError:
+                        print('Validation code not compatible with this version of Python')
+
+        return outputs
 
     def check_model(self) -> None:
         rnd_vals = torch.randn(self.config.batch_size,
@@ -516,10 +378,6 @@ class TrainerScalar1(BaseTrainer):
             raise RuntimeError(f'{e}\n'
                                'Model is not compatible with the input data size')
 
-    def process_model_output(self, datapoint) -> torch.Tensor:
-        scalar = (datapoint.z_start / (65 - self.config.box_width_z)).view(-1, 1).float()
-        return self.model(datapoint.voxels.to(self.device), scalar.to(self.device))
-
 
 if __name__ == '__main__':
     pp = pprint.PrettyPrinter(indent=4)
@@ -527,18 +385,22 @@ if __name__ == '__main__':
 
     CACHED_DATA = True
     FORCE_CACHE_RESET = False  # Deletes cache. Only used if CACHED_DATA is True.
-    EPOCHS = 30
+    EPOCHS = 2
     RESET_CACHE_EPOCH_INTERVAL = EPOCHS
     SAVE_INTERVAL = 1_000_000
-    VALIDATE_INTERVAL = 200
-    LOG_INTERVAL = 10
+    VALIDATE_INTERVAL = 5
+    LOG_INTERVAL = 5
 
     print('Tensorboard URL: ', tensorboard_access.get_public_url(), '\n')
     for alpha, gamma in [(1, 0), (0.25, 2), (0.5, 2), (0.75, 2)]:
         print(f'alpha={alpha}, gamma={gamma}')
-        with TrainerScalar1(EPOCHS,
-                            l1_lambda=0,
-                            criterion_kwargs=dict(alpha=alpha, gamma=gamma),
-                            config_kwargs=dict(training_steps=32 * (1_00 // 32) - 1)) as trainer1:
-            list(trainer1)
-    print(trainer1)
+        with TrainingResources() as resources, timer("Training"):
+            trainer1 = TrainerHybrid1(get_train_loaders,
+                                      get_test_loader,
+                                      resources,
+                                      EPOCHS,
+                                      l1_lambda=0,
+                                      criterion_kwargs=dict(alpha=alpha, gamma=gamma),
+                                      config_kwargs=dict(training_steps=32 * (1000 // 32) - 1))
+            for _ in trainer1:
+                pass

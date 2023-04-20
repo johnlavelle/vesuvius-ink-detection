@@ -1,3 +1,5 @@
+from contextlib import contextmanager
+from timeit import default_timer
 from typing import Tuple
 
 import numpy as np
@@ -69,3 +71,10 @@ def check_points_in_polygon(points, polygon_coords):
     return points_df
 
 
+@contextmanager
+def timer(name):
+    start_time = default_timer()
+    yield
+    end_time = default_timer()
+    elapsed_time = end_time - start_time
+    print(f"{name} took {elapsed_time:.1f} seconds")

@@ -10,7 +10,7 @@ from vesuvius.fragment_dataset import BaseDataset
 
 
 @dataclass
-class Configuration:
+class Configuration1:
     info: str
     model: Type[Module]
     volume_dataset_cls: Type[BaseDataset]
@@ -79,6 +79,16 @@ class Configuration:
         setattr(self, key, value)
 
 
+@dataclass
+class Configuration2:
+    info: str
+    model: Type[Module]
+    training_steps: int
+    batch_size: int
+    shuffle: bool = True
+    num_workers: int = min(1, mp.cpu_count() - 1)
+
+
 def serialize(obj: Any) -> Any:
     if isinstance(obj, type):
         return obj.__name__
@@ -90,3 +100,4 @@ def serialize(obj: Any) -> Any:
         return obj.as_dict()
     else:
         return obj
+

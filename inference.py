@@ -1,4 +1,4 @@
-from training import get_config_model, train_loaders
+from training1 import get_config_model, get_train_loaders
 from tqdm import tqdm
 import torch
 import numpy as np
@@ -15,7 +15,7 @@ model.eval()
 all_outputs = []
 total = None
 tqdm_kwargs = dict(total=total, disable=False, desc='Training', position=0)
-for i, datapoint in tqdm(enumerate(train_loaders(config)), **tqdm_kwargs):
+for i, datapoint in tqdm(enumerate(get_train_loaders(config)), **tqdm_kwargs):
     outputs = model(datapoint.voxels.to(DEVICE))
     center_x = np.array(list(zip(datapoint.x_start, datapoint.x_stop))).mean(axis=1)
     center_y = np.array(list(zip(datapoint.y_start, datapoint.y_stop))).mean(axis=1)

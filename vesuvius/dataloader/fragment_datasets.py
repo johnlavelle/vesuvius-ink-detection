@@ -2,7 +2,7 @@ from abc import ABC, abstractmethod
 
 import xarray as xr
 
-from vesuvius.config import Configuration
+from vesuvius.config import Configuration1
 from vesuvius.data_io import read_dataset_from_zarr
 from vesuvius.fragment_dataset import BaseDataset
 from vesuvius.utils import get_hold_back_mask
@@ -24,7 +24,7 @@ class DatasetIter(ABC):
 
 class XarrayDatasetIter(DatasetIter):
 
-    def __init__(self, config: Configuration):
+    def __init__(self, config: Configuration1):
         super().__init__(config)
         self.fragments = iter(config.fragments)
         self.test_box_fragment = config.test_box_fragment
@@ -52,7 +52,7 @@ class TorchDatasetIter(DatasetIter):
     This done to reduce the memory footprint of the dataset.
     """
 
-    def __init__(self, cfg: Configuration, datasets: DatasetIter):
+    def __init__(self, cfg: Configuration1, datasets: DatasetIter):
         super().__init__(cfg)
         self.training_steps = cfg.training_steps
         self.box_width_sample = cfg.box_width_xy

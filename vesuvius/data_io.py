@@ -24,7 +24,7 @@ from tqdm import tqdm
 from zarr.sync import ProcessSynchronizer
 
 from vesuvius.utils import normalise_images
-from vesuvius.config import Configuration, serialize
+from vesuvius.config import Configuration1, serialize
 
 
 def read_tiffs(fragment: int, prefix: str) -> xr.Dataset:
@@ -137,7 +137,7 @@ class SaveModel:
         torch.save(torch_model.state_dict(), self.model_path)
         return self.model_path
 
-    def config(self, config: Configuration) -> str:
+    def config(self, config: Configuration1) -> str:
         config_dict = asdict(config, dict_factory=lambda obj: {k: serialize(v) for k, v in obj})
         with open(self.conf_path, "w") as json_file:
             json.dump(config_dict, json_file, indent=4)
@@ -155,10 +155,10 @@ class LoadModel:
         _model.load_state_dict(torch.load(self.model_path))
         return self._config.model()
 
-    def _load_config(self) -> Configuration:
+    def _load_config(self) -> Configuration1:
         with open(self.config_path, "r") as json_file:
             config_dict = json.load(json_file)
-        return Configuration(**config_dict)
+        return Configuration1(**config_dict)
 
-    def config(self) -> Configuration:
+    def config(self) -> Configuration1:
         return self._config

@@ -2,24 +2,22 @@ import os
 import random
 import shutil
 import time
-from typing import Union
 from dataclasses import dataclass
+from functools import lru_cache
+from typing import Union
 
 import numpy as np
 import torch
 import xarray as xr
 from torch.utils.data import DataLoader, ConcatDataset, Dataset
 from torch.utils.data._utils.collate import default_collate
-
 from tqdm import tqdm
 
-from vesuvius.config import Configuration
+from vesuvius.config import Configuration1
 from vesuvius.data_io import dataset_to_zarr
 from vesuvius.data_io import read_dataset_from_zarr, SaveModel
 from vesuvius.datapoints import Datapoint
 from vesuvius.fragment_dataset import CachedDataset
-from vesuvius.sampler import CropBoxSobol
-
 from . import fragment_datasets
 
 worker_seed = None
@@ -48,7 +46,7 @@ worker_init_fns = {
 }
 
 
-def standard_data_loader(cfg: Configuration, worker_init='diff') -> DataLoader:
+def standard_data_loader(cfg: Configuration1, worker_init='diff') -> DataLoader:
     xarray_dataset_iter = fragment_datasets.XarrayDatasetIter(cfg)
     datasets = fragment_datasets.TorchDatasetIter(cfg, xarray_dataset_iter)
     datasets = ConcatDataset(datasets)
@@ -60,7 +58,7 @@ def standard_data_loader(cfg: Configuration, worker_init='diff') -> DataLoader:
                       collate_fn=cfg.collate_fn)
 
 
-def cached_data_loader(cfg: Configuration, reset_cache: bool = False) -> Dataset:
+def cached_data_loader(cfg: Configuration1, reset_cache: bool = False) -> Dataset:
     cache_dir = os.path.join(cfg.prefix, f'data_cache_{cfg.suffix_cache}')
     zarr_dir = os.path.join(cache_dir, f'cache.zarr')
 
@@ -111,7 +109,7 @@ def cached_data_loader(cfg: Configuration, reset_cache: bool = False) -> Dataset
     return CachedDataset(zarr_dir, cfg.batch_size, group_pixels=cfg.group_pixels)
 
 
-def get_train_loader(cfg: Configuration,
+def get_train_loader(cfg: Configuration1,
                      cached=False,
                      reset_cache=False,
                      worker_init='diff') -> Union[DataLoader, Dataset]:
@@ -123,14 +121,21 @@ def get_train_loader(cfg: Configuration,
         return standard_data_loader(cfg, worker_init)
 
 
-def get_test_loader(cfg: Configuration) -> DataLoader:
-    """Hold back data test box for fragment 1"""
-    ds_test = read_dataset_from_zarr(cfg.test_box_fragment, cfg.num_workers, cfg.prefix)
-    ds_test.attrs['fragment'] = cfg.test_box_fragment
-    ds_test = ds_test.isel(x=slice(cfg.test_box[0], cfg.test_box[2]),
-                           y=slice(cfg.test_box[1], cfg.test_box[3]))
+@lru_cache(maxsize=1)
+def get_test_dataset(test_box_fragment, num_workers, prefix, x_start, x_stop, y_start, y_stop):
+    ds_test = read_dataset_from_zarr(test_box_fragment, num_workers, prefix)
+    ds_test.attrs['fragment'] = test_box_fragment
+    ds_test = ds_test.isel(x=slice(x_start, x_stop),
+                           y=slice(y_start, y_stop))
     ds_test.load()
     ds_test['full_mask'] = ds_test['mask']
+    return ds_test
+
+
+def get_test_loader(cfg: Configuration1) -> DataLoader:
+    """Hold back data test box for fragment 1"""
+    ds_test = get_test_dataset(cfg.test_box_fragment, cfg.num_workers, cfg.prefix,
+                               cfg.test_box[0], cfg.test_box[2], cfg.test_box[1], cfg.test_box[3])
     test_dataset = cfg.volume_dataset_cls(ds_test,
                                           cfg.box_width_xy,
                                           cfg.box_width_z,

@@ -2,7 +2,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
-from training import FocalLoss
+from training1 import FocalLoss
 
 
 def test_get_focal_weights():
