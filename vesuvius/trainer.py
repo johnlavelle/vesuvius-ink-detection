@@ -85,23 +85,26 @@ class BaseTrainer(ABC):
         self.datapoint = self.outputs = None
         self.l1_lambda = l1_lambda
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+        print(f'Using device: {self.device}', '\n')
 
-        self.config = self.get_config(**config_kwargs)
+        self.config = self._default_config(**config_kwargs)
 
         self.model = self.config.model(**model_kwargs).to(self.device)
         self.batch_size = self.config.batch_size
         self.total = self.epochs * self.config.training_steps
         self.loops = self.total // self.batch_size
-        self.check_model()
+        self._check_model()
         pprint.pprint(self.config)
         print()
 
-        self.optimizer_scheduler = optimizer_scheduler(self.model, learning_rate, self.total)
+        self.optimizer_scheduler = optimizer_scheduler(self.model, self.learning_rate, self.total)
         self.optimizer = self.optimizer_scheduler.optimizer()
         self.scheduler = self.optimizer_scheduler.scheduler(self.optimizer)
         self.criterion = criterion
+        print(self.optimizer_scheduler, '\n')
+        print(self.criterion_validate, '\n')
 
-        self.train_loader_iter = train_loader(self.config)
+        self.train_loader_iter = train_loader(self.config, self.epochs)
         self.test_loader_iter = test_loader(self.config)
         self.train_loader_iter = islice(self.train_loader_iter, self.config.training_steps)
 
@@ -114,16 +117,16 @@ class BaseTrainer(ABC):
         ...
 
     @abstractmethod
-    def check_model(self) -> None:
+    def _check_model(self) -> None:
         ...
 
     @staticmethod
     @abstractmethod
-    def get_config(**kwargs) -> dataclass:
+    def _default_config(**kwargs) -> dataclass:
         ...
 
     @abstractmethod
-    def validate(self, i) -> None:
+    def validate(self) -> None:
         ...
 
     def save_model_output(self):
@@ -140,11 +143,14 @@ class BaseTrainer(ABC):
 
     def trainer_generator(self) -> Generator[Type['BaseTrainer'], None, None]:
         while self.resource.incrementer.loop < self.loops:
+            next(self)
             yield self
 
-    def __next__(self) -> Type['BaseTrainer']:
+    def __next__(self) -> 'BaseTrainer':
         if self.resource.incrementer.loop >= self.loops:
             raise StopIteration
+        self.datapoint = next(self.train_loader_iter)
+        self.resource.incrementer.increment(len(self.datapoint.label))
         return self
 
     def __iter__(self):
@@ -154,3 +160,18 @@ class BaseTrainer(ABC):
         except Exception as e:
             print("An exception occurred during training: ", e)
             raise
+
+    def __str__(self) -> str:
+        loop = self.resource.incrementer.loop
+        lr = self.learning_rate
+        epochs = self.epochs
+        batch_size = self.batch_size
+        return f"Current Loop: {loop}, Learning Rate: {lr}, Epochs: {epochs}, Batch Size: {batch_size}"
+
+    def __repr__(self) -> str:
+        classname = self.__class__.__name__
+        loop = self.resource.incrementer.loop
+        lr = self.learning_rate
+        epochs = self.epochs
+        batch_size = self.batch_size
+        return f"{classname}(current_loop={loop}, learning_rate={lr}, epochs={epochs}, batch_size={batch_size})"

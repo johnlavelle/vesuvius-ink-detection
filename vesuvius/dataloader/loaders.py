@@ -4,7 +4,7 @@ import shutil
 import time
 from dataclasses import dataclass
 from functools import lru_cache
-from typing import Union
+from typing import Union, Generator
 
 import numpy as np
 import torch
@@ -132,7 +132,7 @@ def get_test_dataset(test_box_fragment, num_workers, prefix, x_start, x_stop, y_
     return ds_test
 
 
-def get_test_loader(cfg: Configuration1) -> DataLoader:
+def test_loader(cfg: Configuration1) -> DataLoader:
     """Hold back data test box for fragment 1"""
     ds_test = get_test_dataset(cfg.test_box_fragment, cfg.num_workers, cfg.prefix,
                                cfg.test_box[0], cfg.test_box[2], cfg.test_box[1], cfg.test_box[3])
@@ -163,3 +163,10 @@ def get_train_loader_regular_z(cfg: dataclass, force_cache_reset) -> DataLoader:
 
     cfg.collate_fn = collate_catch_errs
     return get_train_loader(cfg, cached=True, reset_cache=force_cache_reset, worker_init='same')
+
+
+def get_train_loaders(cfg, epochs, cached_data, force_cache_reset, reset_cache_epoch_interval) -> Generator[Datapoint, None, None]:
+    for epoch in range(epochs):
+        reset_cache = cached_data and (epoch != 0 and epoch % reset_cache_epoch_interval == 0)
+        reset_cache = reset_cache or (epoch == 0 and force_cache_reset)
+        yield from get_train_loader(cfg, cached=cached_data, reset_cache=reset_cache)

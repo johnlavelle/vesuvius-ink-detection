@@ -1,8 +1,8 @@
 import copy
 import multiprocessing as mp
 import pprint
+from functools import partial
 from itertools import islice
-from typing import Any, Generator
 
 import dask
 import numpy as np
@@ -15,7 +15,7 @@ from xarray import DataArray
 
 import tensorboard_access
 from vesuvius.config import Configuration1
-from vesuvius.dataloader import get_train_loader, get_test_loader
+from vesuvius.dataloader import test_loader, get_train_loaders
 from vesuvius.datapoints import Datapoint, DatapointTuple
 from vesuvius.fragment_dataset import BaseDataset
 from vesuvius.sampler import CropBoxSobol, CropBoxRegular
@@ -56,7 +56,7 @@ class SampleXYZ(BaseDataset):
 class CNN1(nn.Module):
 
     def __init__(self):
-        super(CNN1, self).__init__()
+        super().__init__()
         self.conv1 = nn.Conv3d(1, 16, 3, 1, 1)
         self.pool1 = nn.MaxPool3d(2, 2)
         self.conv2 = nn.Conv3d(16, 32, 3, 1, 1)
@@ -96,7 +96,7 @@ def cnn1_sequential():
 
 class HybridModel(nn.Module):
     def __init__(self, dropout_rate=0.3):
-        super(HybridModel, self).__init__()
+        super().__init__()
 
         self.conv1 = nn.Conv3d(1, 16, 3, 1, 1)
         self.bn1 = nn.BatchNorm3d(16)
@@ -164,7 +164,7 @@ class HybridModel(nn.Module):
 
 class FocalLoss(nn.Module):
     def __init__(self, alpha=0.25, gamma=2.0, reduction='mean'):
-        super(FocalLoss, self).__init__()
+        super().__init__()
         self.alpha = alpha
         self.gamma = gamma
         self.reduction = reduction
@@ -193,6 +193,9 @@ class FocalLoss(nn.Module):
             return focal_loss.sum()
         else:
             return focal_loss
+
+    def __str__(self):
+        return f'FocalLoss(alpha={self.alpha}, gamma={self.gamma}, reduction={self.reduction})'
 
 
 # Configuration
@@ -263,11 +266,24 @@ def get_train2_config(config) -> Configuration1:
 # Training
 
 
-def get_train_loaders(cfg) -> Generator[Datapoint, None, None]:
-    for epoch in range(EPOCHS):
-        reset_cache = CACHED_DATA and (epoch != 0 and epoch % RESET_CACHE_EPOCH_INTERVAL == 0)
-        reset_cache = reset_cache or (epoch == 0 and FORCE_CACHE_RESET)
-        yield from get_train_loader(cfg, cached=CACHED_DATA, reset_cache=reset_cache)
+class SGDOneCycleLR(OptimiserScheduler):
+    def __init__(self, model: nn.Module, learning_rate: float, total_steps: int):
+        super().__init__(model, learning_rate, total_steps)
+        self.model = model
+        self.learning_rate = learning_rate
+        self.total_steps = total_steps
+        self.alpha = alpha
+        self.gamma = gamma
+
+    def optimizer(self):
+        return optim.SGD(self.model.parameters(), lr=self.learning_rate)
+
+    def scheduler(self, optimizer: Optimizer):
+        return torch.optim.lr_scheduler.OneCycleLR(optimizer, max_lr=self.learning_rate, total_steps=self.total_steps)
+
+    def __str__(self):
+        return f'SGDOneCycleLR(model={self.model.__class__.__name__}, learning_rate={self.learning_rate}, ' \
+               f'total_steps={self.total_steps}, alpha={self.alpha}, gamma={self.gamma})'
 
 
 class Trainer1(BaseTrainer):
@@ -277,7 +293,7 @@ class Trainer1(BaseTrainer):
         self.test_loader_iter = islice(self.test_loader_iter, 20)
 
     @staticmethod
-    def get_config(**kwargs) -> Configuration1:
+    def _default_config(**kwargs) -> Configuration1:
         xl, yl = 2048, 7168  # lower left corner of the test box
         width, height = 2045, 2048
         default_config = dict(info="",
@@ -295,34 +311,35 @@ class Trainer1(BaseTrainer):
                               balance_ink=True,
                               shuffle=True,
                               group_pixels=False,
-                              num_workers=0, #min(1, mp.cpu_count() - 1),
+                              num_workers=min(1, mp.cpu_count() - 1),
                               prefix='/data/kaggle/input/vesuvius-challenge-ink-detection/train/',
                               suffix_cache='sobol',
                               collate_fn=None)
         return Configuration1(**{**default_config, **kwargs})
 
-    def validate(self, i) -> None:
-        train.model.eval()
-        with torch.no_grad():
-            for datapoint_test in self.test_loader_iter:
-                outputs = self.apply_forward(datapoint_test)
-                val_loss = self.criterion_validate(outputs, datapoint_test.label.float().to(self.device))
-                self.resource.logger_test_loss.update(val_loss.item(), len(datapoint_test.voxels))
-        self.resource.logger_test_loss.log(i)
-
-    def apply_forward(self, datapoint) -> torch.Tensor:
+    def _apply_forward(self, datapoint) -> torch.Tensor:
         scalar = (datapoint.z_start / (65 - self.config.box_width_z)).view(-1, 1).float()
         return self.model(datapoint.voxels.to(self.device), scalar.to(self.device))
 
-    def forward(self) -> torch.Tensor:
-        self.datapoint = next(self.train_loader_iter)
+    def validate(self) -> 'BaseTrainer':
+        train.model.eval()
+        with torch.no_grad():
+            for datapoint_test in self.test_loader_iter:
+                outputs = self._apply_forward(datapoint_test)
+                val_loss = self.criterion_validate(outputs, datapoint_test.label.float().to(self.device))
+                self.resource.logger_test_loss.update(val_loss.item(), len(datapoint_test.voxels))
+        self.resource.logger_test_loss.log(self.resource.incrementer.count)
+        return self
+
+    def forward(self) -> 'BaseTrainer':
         self.model.train()
         self.optimizer.zero_grad()
-        self.outputs = self.apply_forward(self.datapoint)
-        return self.outputs
+        self.outputs = self._apply_forward(self.datapoint)
+        return self
 
-    def loss(self) -> float:
+    def loss(self) -> 'BaseTrainer':
         target = self.datapoint.label.float().to(self.device)
+
         base_loss = self.criterion(self.outputs, target)
         l1_regularization = torch.norm(self.model.fc_scalar.weight, p=1)
         loss = base_loss + (self.l1_lambda * l1_regularization)
@@ -332,10 +349,9 @@ class Trainer1(BaseTrainer):
 
         self.resource.logger_loss.update(loss.item(), len(self.datapoint.voxels))
         self.resource.logger_lr.update(self.scheduler.get_last_lr()[0], 1)
-        self.resource.incrementer.increment(len(self.outputs))
-        return loss
+        return self
 
-    def check_model(self) -> None:
+    def _check_model(self) -> None:
         rnd_vals = torch.randn(self.config.batch_size,
                                1,
                                self.config.box_width_z,
@@ -353,23 +369,8 @@ class Trainer1(BaseTrainer):
                                'Model is not compatible with the input data size')
 
 
-class SGDOneCycleLR(OptimiserScheduler):
-    def __init__(self, model: nn.Module, learning_rate: float, total_steps: int):
-        super().__init__(model, learning_rate, total_steps)
-        self.model = model
-        self.learning_rate = learning_rate
-        self.total_steps = total_steps
-        self.alpha = alpha
-        self.gamma = gamma
-
-    def optimizer(self):
-        return optim.SGD(self.model.parameters(), lr=self.learning_rate)
-
-    def scheduler(self, optimizer: Optimizer):
-        return torch.optim.lr_scheduler.OneCycleLR(optimizer, max_lr=self.learning_rate, total_steps=self.total_steps)
-
-
 if __name__ == '__main__':
+
     pp = pprint.PrettyPrinter(indent=4)
     dask.config.set(scheduler='synchronous')
     print('Tensorboard URL: ', tensorboard_access.get_public_url(), '\n')
@@ -379,15 +380,23 @@ if __name__ == '__main__':
     EPOCHS = 2
     RESET_CACHE_EPOCH_INTERVAL = EPOCHS
     SAVE_INTERVAL = 1_000_000
-    VALIDATE_INTERVAL = 5
-    LOG_INTERVAL = 5
+    VALIDATE_INTERVAL = 1000
+    LOG_INTERVAL = 100
+
+    train_loaders = partial(
+        get_train_loaders,
+        cached_data=CACHED_DATA,
+        force_cache_reset=FORCE_CACHE_RESET,
+        reset_cache_epoch_interval=RESET_CACHE_EPOCH_INTERVAL)
 
     for alpha, gamma in [(1, 0), (0.25, 2), (0.5, 2), (0.75, 2)]:
+
         criterion = FocalLoss(alpha=alpha, gamma=gamma)
-        print(f'alpha={alpha}, gamma={gamma}')
+
         with TrainingResources() as resources, timer("Training"):
-            trainer1 = Trainer1(get_train_loaders,
-                                get_test_loader,
+
+            trainer1 = Trainer1(train_loaders,
+                                test_loader,
                                 resources,
                                 SGDOneCycleLR,
                                 criterion,
@@ -395,20 +404,18 @@ if __name__ == '__main__':
                                 learning_rate=0.03,
                                 l1_lambda=0,
                                 epochs=EPOCHS,
-                                config_kwargs=dict(training_steps=32 * (1000 // 32) - 1))
+                                config_kwargs=dict(training_steps=32 * (40000 // 32) - 1))
+
             for i, train in enumerate(trainer1):
-                train.forward()
-                train.loss()
+
+                train.forward().loss()
 
                 if i == 0:
                     continue
-                if i % SAVE_INTERVAL == 0:
-                    train.resource.saver.model(train.model)
-                    train.resource.saver.config(train.config)
                 if i % LOG_INTERVAL == 0:
                     train.resource.logger_loss.log(train.resource.incrementer.count)
                     train.resource.logger_lr.log(train.resource.incrementer.count)
                 if i % VALIDATE_INTERVAL == 0:
-                    train.validate(train.resource.incrementer.count)
+                    train.validate()
 
             trainer1.save_model_output()

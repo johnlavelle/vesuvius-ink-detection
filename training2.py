@@ -49,7 +49,7 @@ class Trainer2(BaseTrainer):
         super().__init__()
 
     @staticmethod
-    def get_config(**kwargs) -> Configuration2:
+    def _default_config(**kwargs) -> Configuration2:
         return Configuration2(
             model=BinaryClassifier
         )
@@ -66,7 +66,7 @@ class Trainer2(BaseTrainer):
     def apply_forward(self, datapoint) -> torch.Tensor:
         ...
 
-    def check_model(self) -> None:
+    def _check_model(self) -> None:
         ...
 
     def train_loaders(self) -> Generator:
