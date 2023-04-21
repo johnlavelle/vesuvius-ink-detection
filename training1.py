@@ -1,8 +1,8 @@
 import copy
 import multiprocessing as mp
-from itertools import islice
 import pprint
-from typing import Generator, Any
+from itertools import islice
+from typing import Any, Generator
 
 import dask
 import numpy as np
@@ -19,7 +19,7 @@ from vesuvius.dataloader import get_train_loader, get_test_loader
 from vesuvius.datapoints import Datapoint, DatapointTuple
 from vesuvius.fragment_dataset import BaseDataset
 from vesuvius.sampler import CropBoxSobol, CropBoxRegular
-from vesuvius.trainer import TrainingResources, BaseTrainer
+from vesuvius.trainer import TrainingResources, OptimiserScheduler, BaseTrainer
 from vesuvius.utils import timer
 
 # If READ_EXISTING_CONFIG is False, config is specified in Configuration (below)
@@ -270,7 +270,7 @@ def get_train_loaders(cfg) -> Generator[Datapoint, None, None]:
         yield from get_train_loader(cfg, cached=CACHED_DATA, reset_cache=reset_cache)
 
 
-class TrainerHybrid1(BaseTrainer):
+class Trainer1(BaseTrainer):
 
     def __init__(self, *args, **kwargs) -> None:
         super().__init__(*args, **kwargs)
@@ -295,26 +295,19 @@ class TrainerHybrid1(BaseTrainer):
                               balance_ink=True,
                               shuffle=True,
                               group_pixels=False,
-                              num_workers=min(1, mp.cpu_count() - 1),
+                              num_workers=0, #min(1, mp.cpu_count() - 1),
                               prefix='/data/kaggle/input/vesuvius-challenge-ink-detection/train/',
                               suffix_cache='sobol',
                               collate_fn=None)
         return Configuration1(**{**default_config, **kwargs})
 
-    def get_criterion(self, **kwargs) -> nn.Module:
-        return FocalLoss(**kwargs)
-
-    def get_scheduler(self, optimizer, total) -> Any:
-        return torch.optim.lr_scheduler.OneCycleLR(optimizer, max_lr=self.learning_rate, total_steps=total)
-
-    def get_optimizer(self) -> Optimizer:
-        return optim.SGD(self.model.parameters(), lr=self.learning_rate)
-
     def validate(self, i) -> None:
-        for datapoint_test in self.test_loader_iter:
-            outputs = self.apply_forward(datapoint_test)
-            val_loss = self.criterion_val(outputs, datapoint_test.label.float().to(self.device))
-            self.resource.logger_test_loss.update(val_loss.item(), len(datapoint_test.voxels))
+        train.model.eval()
+        with torch.no_grad():
+            for datapoint_test in self.test_loader_iter:
+                outputs = self.apply_forward(datapoint_test)
+                val_loss = self.criterion_validate(outputs, datapoint_test.label.float().to(self.device))
+                self.resource.logger_test_loss.update(val_loss.item(), len(datapoint_test.voxels))
         self.resource.logger_test_loss.log(i)
 
     def apply_forward(self, datapoint) -> torch.Tensor:
@@ -340,24 +333,6 @@ class TrainerHybrid1(BaseTrainer):
         self.resource.logger_loss.update(loss.item(), len(self.datapoint.voxels))
         self.resource.logger_lr.update(self.scheduler.get_last_lr()[0], 1)
         self.resource.incrementer.increment(len(self.outputs))
-
-        if self.resource.incrementer.loop != 0:
-            if self.resource.incrementer.loop % SAVE_INTERVAL == 0:
-                self.resource.saver.model(self.model)
-                self.resource.saver.config(self.config)
-
-            if self.resource.incrementer.loop % LOG_INTERVAL == 0:
-                self.resource.logger_loss.log(self.resource.incrementer.count)
-                self.resource.logger_lr.log(self.resource.incrementer.count)
-
-            if self.resource.incrementer.loop % VALIDATE_INTERVAL == 0:
-                try:
-                    self.model.eval()
-                    with torch.no_grad():
-                        self.validate(self.resource.incrementer.count)
-                    self.model.train()
-                except AttributeError:
-                    print('Validation code not compatible with this version of Python')
         return loss
 
     def check_model(self) -> None:
@@ -378,9 +353,26 @@ class TrainerHybrid1(BaseTrainer):
                                'Model is not compatible with the input data size')
 
 
+class SGDOneCycleLR(OptimiserScheduler):
+    def __init__(self, model: nn.Module, learning_rate: float, total_steps: int):
+        super().__init__(model, learning_rate, total_steps)
+        self.model = model
+        self.learning_rate = learning_rate
+        self.total_steps = total_steps
+        self.alpha = alpha
+        self.gamma = gamma
+
+    def optimizer(self):
+        return optim.SGD(self.model.parameters(), lr=self.learning_rate)
+
+    def scheduler(self, optimizer: Optimizer):
+        return torch.optim.lr_scheduler.OneCycleLR(optimizer, max_lr=self.learning_rate, total_steps=self.total_steps)
+
+
 if __name__ == '__main__':
     pp = pprint.PrettyPrinter(indent=4)
     dask.config.set(scheduler='synchronous')
+    print('Tensorboard URL: ', tensorboard_access.get_public_url(), '\n')
 
     CACHED_DATA = True
     FORCE_CACHE_RESET = False  # Deletes cache. Only used if CACHED_DATA is True.
@@ -390,18 +382,33 @@ if __name__ == '__main__':
     VALIDATE_INTERVAL = 5
     LOG_INTERVAL = 5
 
-    print('Tensorboard URL: ', tensorboard_access.get_public_url(), '\n')
     for alpha, gamma in [(1, 0), (0.25, 2), (0.5, 2), (0.75, 2)]:
+        criterion = FocalLoss(alpha=alpha, gamma=gamma)
         print(f'alpha={alpha}, gamma={gamma}')
         with TrainingResources() as resources, timer("Training"):
-            trainer1 = TrainerHybrid1(get_train_loaders,
-                                      get_test_loader,
-                                      resources,
-                                      EPOCHS,
-                                      l1_lambda=0,
-                                      criterion_kwargs=dict(alpha=alpha, gamma=gamma),
-                                      config_kwargs=dict(training_steps=32 * (1000 // 32) - 1))
-            for t in trainer1:
-                t.forward()
-                t.loss()
+            trainer1 = Trainer1(get_train_loaders,
+                                get_test_loader,
+                                resources,
+                                SGDOneCycleLR,
+                                criterion,
+                                criterion,
+                                learning_rate=0.03,
+                                l1_lambda=0,
+                                epochs=EPOCHS,
+                                config_kwargs=dict(training_steps=32 * (1000 // 32) - 1))
+            for i, train in enumerate(trainer1):
+                train.forward()
+                train.loss()
+
+                if i == 0:
+                    continue
+                if i % SAVE_INTERVAL == 0:
+                    train.resource.saver.model(train.model)
+                    train.resource.saver.config(train.config)
+                if i % LOG_INTERVAL == 0:
+                    train.resource.logger_loss.log(train.resource.incrementer.count)
+                    train.resource.logger_lr.log(train.resource.incrementer.count)
+                if i % VALIDATE_INTERVAL == 0:
+                    train.validate(train.resource.incrementer.count)
+
             trainer1.save_model_output()

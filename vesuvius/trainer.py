@@ -5,18 +5,16 @@ import pprint
 import time
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
-from typing import Any, Generator, Iterator, Callable
 from itertools import islice
+from typing import Any, Generator, Callable, Type, Protocol
 
 import torch
 from torch import nn as nn
 from torch.optim import Optimizer
 from torch.utils.tensorboard import SummaryWriter
 from tqdm import tqdm
-from memory_profiler import profile
 
 from vesuvius.data_io import SaveModel
-from vesuvius.datapoints import Datapoint
 from vesuvius.trackers import Incrementer, TrackerAvg
 
 
@@ -46,32 +44,46 @@ class TrainingResources:
         gc.collect()
 
 
+class OptimiserScheduler(Protocol):
+    def __init__(self, model: nn.Module, learning_rate: float, total_steps: int):
+        ...
+
+    def optimizer(self) -> Optimizer:
+        ...
+
+    def scheduler(self, optimizer: Optimizer) -> Any:
+        ...
+
+
 class BaseTrainer(ABC):
 
     def __init__(self,
                  train_loader: Callable,
                  test_loader: Callable,
                  resources: TrainingResources,
-                 epochs: int = 1,
+                 optimizer_scheduler: Type[OptimiserScheduler],
+                 criterion: Callable,
+                 criterion_validate: Callable = None,
                  learning_rate: float = 0.03,
-                 l1_lambda: float = 0.001,
-                 criterion_kwargs: dict = None,
+                 l1_lambda: float = 0,
+                 epochs: int = 1,
                  model_kwargs: dict = None,
                  config_kwargs: dict = None) -> None:
 
         self.epochs = epochs
-        self.learning_rate = learning_rate
-        self.l1_lambda = l1_lambda
-        if criterion_kwargs is None:
-            criterion_kwargs = {}
+
         if model_kwargs is None:
             model_kwargs = {}
         if config_kwargs is None:
             config_kwargs = {}
 
+        if criterion_validate is None:
+            criterion_validate = criterion
+        self.criterion_validate = criterion_validate
+        self.learning_rate = learning_rate
         self.resource = resources
         self.datapoint = self.outputs = None
-
+        self.l1_lambda = l1_lambda
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
         self.config = self.get_config(**config_kwargs)
@@ -84,26 +96,14 @@ class BaseTrainer(ABC):
         pprint.pprint(self.config)
         print()
 
-        self.optimizer = self.get_optimizer()
-        self.scheduler = self.get_scheduler(self.optimizer, self.loops)
-        self.criterion = self.get_criterion(**criterion_kwargs)
-        self.criterion_val = nn.BCEWithLogitsLoss()
+        self.optimizer_scheduler = optimizer_scheduler(self.model, learning_rate, self.total)
+        self.optimizer = self.optimizer_scheduler.optimizer()
+        self.scheduler = self.optimizer_scheduler.scheduler(self.optimizer)
+        self.criterion = criterion
 
         self.train_loader_iter = train_loader(self.config)
         self.test_loader_iter = test_loader(self.config)
-        self.train_loader_iter = islice(self.train_loader_iter,  self.config.training_steps)
-
-    @abstractmethod
-    def get_criterion(self, **kwargs) -> nn.Module:
-        ...
-
-    @abstractmethod
-    def get_scheduler(self, optimizer, total) -> Any:
-        ...
-
-    @abstractmethod
-    def get_optimizer(self) -> Optimizer:
-        ...
+        self.train_loader_iter = islice(self.train_loader_iter, self.config.training_steps)
 
     @abstractmethod
     def forward(self) -> torch.Tensor:
@@ -138,15 +138,11 @@ class BaseTrainer(ABC):
         config_json = json.dumps(data, indent=4)
         self.resource.writer.add_text('config', config_json)
 
-    @abstractmethod
-    def forward(self) -> float:
-        ...
-
-    def self_generator(self) -> Generator:
+    def trainer_generator(self) -> Generator[Type['BaseTrainer'], None, None]:
         while self.resource.incrementer.loop < self.loops:
             yield self
 
-    def __next__(self):
+    def __next__(self) -> Type['BaseTrainer']:
         if self.resource.incrementer.loop >= self.loops:
             raise StopIteration
         return self
@@ -154,8 +150,7 @@ class BaseTrainer(ABC):
     def __iter__(self):
         tqdm_kwargs = dict(total=self.loops, disable=False, desc='Training', position=0)
         try:
-            yield from tqdm(self.self_generator(), **tqdm_kwargs)
+            yield from tqdm(self.trainer_generator(), **tqdm_kwargs)
         except Exception as e:
             print("An exception occurred during training: ", e)
             raise
-
