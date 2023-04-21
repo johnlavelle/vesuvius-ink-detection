@@ -46,20 +46,6 @@ class TrainingResources:
         gc.collect()
 
 
-class BaseDataLoader(ABC):
-
-    def __init__(self, config):
-        self.config = config
-
-    @abstractmethod
-    def train_loaders(self) -> Generator[Datapoint, None, None]:
-        ...
-
-    @abstractmethod
-    def test_loaders(self) -> Generator[Datapoint, None, None]:
-        ...
-
-
 class BaseTrainer(ABC):
 
     def __init__(self,
@@ -69,7 +55,6 @@ class BaseTrainer(ABC):
                  epochs: int = 1,
                  learning_rate: float = 0.03,
                  l1_lambda: float = 0.001,
-                 compute_loss: bool = True,
                  criterion_kwargs: dict = None,
                  model_kwargs: dict = None,
                  config_kwargs: dict = None) -> None:
@@ -77,7 +62,6 @@ class BaseTrainer(ABC):
         self.epochs = epochs
         self.learning_rate = learning_rate
         self.l1_lambda = l1_lambda
-        self.compute_loss = compute_loss
         if criterion_kwargs is None:
             criterion_kwargs = {}
         if model_kwargs is None:
@@ -86,6 +70,7 @@ class BaseTrainer(ABC):
             config_kwargs = {}
 
         self.resource = resources
+        self.datapoint = self.outputs = None
 
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
@@ -107,7 +92,6 @@ class BaseTrainer(ABC):
         self.train_loader_iter = train_loader(self.config)
         self.test_loader_iter = test_loader(self.config)
         self.train_loader_iter = islice(self.train_loader_iter,  self.config.training_steps)
-        self.test_loader_iter = islice(self.test_loader_iter, 20)
 
     @abstractmethod
     def get_criterion(self, **kwargs) -> nn.Module:
@@ -122,7 +106,11 @@ class BaseTrainer(ABC):
         ...
 
     @abstractmethod
-    def forward(self, datapoint) -> torch.Tensor:
+    def forward(self) -> torch.Tensor:
+        ...
+
+    @abstractmethod
+    def loss(self) -> float:
         ...
 
     @abstractmethod
@@ -138,14 +126,6 @@ class BaseTrainer(ABC):
     def validate(self, i) -> None:
         ...
 
-    @abstractmethod
-    def get_loss(self, compute_loss=True) -> float:
-        ...
-
-    def loss_generator(self) -> Iterator[float]:
-        while self.resource.incrementer.loop < self.loops:
-            yield self.get_loss()
-
     def save_model_output(self):
         self.config.update_nn_kwargs(self.optimizer, self.scheduler, self.criterion, self.learning_rate, self.epochs)
         self.config['performance_dict'] = {'loss/train': self.resource.logger_loss.average,
@@ -158,17 +138,24 @@ class BaseTrainer(ABC):
         config_json = json.dumps(data, indent=4)
         self.resource.writer.add_text('config', config_json)
 
-    def __next__(self) -> float:
+    @abstractmethod
+    def forward(self) -> float:
+        ...
+
+    def self_generator(self) -> Generator:
+        while self.resource.incrementer.loop < self.loops:
+            yield self
+
+    def __next__(self):
         if self.resource.incrementer.loop >= self.loops:
             raise StopIteration
-        return self.get_loss(compute_loss=self.compute_loss)
+        return self
 
     def __iter__(self):
         tqdm_kwargs = dict(total=self.loops, disable=False, desc='Training', position=0)
         try:
-            yield from tqdm(self.loss_generator(), **tqdm_kwargs)
+            yield from tqdm(self.self_generator(), **tqdm_kwargs)
         except Exception as e:
             print("An exception occurred during training: ", e)
             raise
-        finally:
-            self.save_model_output()
+

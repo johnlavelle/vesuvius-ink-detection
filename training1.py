@@ -1,5 +1,6 @@
 import copy
 import multiprocessing as mp
+from itertools import islice
 import pprint
 from typing import Generator, Any
 
@@ -273,6 +274,7 @@ class TrainerHybrid1(BaseTrainer):
 
     def __init__(self, *args, **kwargs) -> None:
         super().__init__(*args, **kwargs)
+        self.test_loader_iter = islice(self.test_loader_iter, 20)
 
     @staticmethod
     def get_config(**kwargs) -> Configuration1:
@@ -310,56 +312,53 @@ class TrainerHybrid1(BaseTrainer):
 
     def validate(self, i) -> None:
         for datapoint_test in self.test_loader_iter:
-            outputs = self.forward(datapoint_test)
+            outputs = self.apply_forward(datapoint_test)
             val_loss = self.criterion_val(outputs, datapoint_test.label.float().to(self.device))
             self.resource.logger_test_loss.update(val_loss.item(), len(datapoint_test.voxels))
         self.resource.logger_test_loss.log(i)
 
-    def forward(self, datapoint) -> torch.Tensor:
+    def apply_forward(self, datapoint) -> torch.Tensor:
         scalar = (datapoint.z_start / (65 - self.config.box_width_z)).view(-1, 1).float()
         return self.model(datapoint.voxels.to(self.device), scalar.to(self.device))
 
-    def get_loss(self, compute_loss=True) -> torch.Tensor:
-        if self.resource.incrementer.loop == self.loops:
-            raise StopIteration
-
-        datapoint = next(self.train_loader_iter)
+    def forward(self) -> torch.Tensor:
+        self.datapoint = next(self.train_loader_iter)
         self.model.train()
         self.optimizer.zero_grad()
-        outputs = self.forward(datapoint)
+        self.outputs = self.apply_forward(self.datapoint)
+        return self.outputs
 
-        if compute_loss:
-            target = datapoint.label.float().to(self.device)
-            base_loss = self.criterion(outputs, target)
-            l1_regularization = torch.norm(self.model.fc_scalar.weight, p=1)
-            loss = base_loss + (self.l1_lambda * l1_regularization)
-            loss.backward()
-            self.optimizer.step()
-            self.scheduler.step()
+    def loss(self) -> float:
+        target = self.datapoint.label.float().to(self.device)
+        base_loss = self.criterion(self.outputs, target)
+        l1_regularization = torch.norm(self.model.fc_scalar.weight, p=1)
+        loss = base_loss + (self.l1_lambda * l1_regularization)
+        loss.backward()
+        self.optimizer.step()
+        self.scheduler.step()
 
-            self.resource.logger_loss.update(loss.item(), len(datapoint.voxels))
-            self.resource.logger_lr.update(self.scheduler.get_last_lr()[0], 1)
-            self.resource.incrementer.increment(len(outputs))
+        self.resource.logger_loss.update(loss.item(), len(self.datapoint.voxels))
+        self.resource.logger_lr.update(self.scheduler.get_last_lr()[0], 1)
+        self.resource.incrementer.increment(len(self.outputs))
 
-            if self.resource.incrementer.loop != 0:
-                if self.resource.incrementer.loop % SAVE_INTERVAL == 0:
-                    self.resource.saver.model(self.model)
-                    self.resource.saver.config(self.config)
+        if self.resource.incrementer.loop != 0:
+            if self.resource.incrementer.loop % SAVE_INTERVAL == 0:
+                self.resource.saver.model(self.model)
+                self.resource.saver.config(self.config)
 
-                if self.resource.incrementer.loop % LOG_INTERVAL == 0:
-                    self.resource.logger_loss.log(self.resource.incrementer.count)
-                    self.resource.logger_lr.log(self.resource.incrementer.count)
+            if self.resource.incrementer.loop % LOG_INTERVAL == 0:
+                self.resource.logger_loss.log(self.resource.incrementer.count)
+                self.resource.logger_lr.log(self.resource.incrementer.count)
 
-                if self.resource.incrementer.loop % VALIDATE_INTERVAL == 0:
-                    try:
-                        self.model.eval()
-                        with torch.no_grad():
-                            self.validate(self.resource.incrementer.count)
-                        self.model.train()
-                    except AttributeError:
-                        print('Validation code not compatible with this version of Python')
-
-        return outputs
+            if self.resource.incrementer.loop % VALIDATE_INTERVAL == 0:
+                try:
+                    self.model.eval()
+                    with torch.no_grad():
+                        self.validate(self.resource.incrementer.count)
+                    self.model.train()
+                except AttributeError:
+                    print('Validation code not compatible with this version of Python')
+        return loss
 
     def check_model(self) -> None:
         rnd_vals = torch.randn(self.config.batch_size,
@@ -402,5 +401,7 @@ if __name__ == '__main__':
                                       l1_lambda=0,
                                       criterion_kwargs=dict(alpha=alpha, gamma=gamma),
                                       config_kwargs=dict(training_steps=32 * (1000 // 32) - 1))
-            for _ in trainer1:
-                pass
+            for t in trainer1:
+                t.forward()
+                t.loss()
+            trainer1.save_model_output()

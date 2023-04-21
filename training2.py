@@ -63,7 +63,7 @@ class Trainer2(BaseTrainer):
     def get_optimizer(self) -> Optimizer:
         ...
 
-    def forward(self, datapoint) -> torch.Tensor:
+    def apply_forward(self, datapoint) -> torch.Tensor:
         ...
 
     def check_model(self) -> None:
@@ -78,7 +78,7 @@ class Trainer2(BaseTrainer):
     def validate(self, i) -> None:
         ...
 
-    def get_loss(self, compute_loss=True) -> float:
+    def forward(self, compute_loss=True) -> float:
         ...
 
 
