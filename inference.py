@@ -1,4 +1,4 @@
-from training1 import get_config_model
+from trainer1 import get_config_model
 from vesuvius.dataloader import get_train_loaders
 from tqdm import tqdm
 import torch

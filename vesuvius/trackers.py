@@ -1,7 +1,13 @@
+import gc
+import os
+import time
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
 
+import torch
 from torch.utils.tensorboard import SummaryWriter
+
+from vesuvius.data_io import SaveModel
 
 
 class Incrementer:
@@ -60,9 +66,43 @@ class TrackerAvg(BaseTracker):
             return 0.0
 
     def log(self, iteration: int) -> None:
-        # if self.ignore:
-        #     self.ignore = False
-        # else:
         self.summary_writer.add_scalar(self.tag, self.average, iteration)
         self.value = 0.0
         self.count = 0
+
+
+class Track:
+    def __init__(self, output_dir="output/runs"):
+        self.output_dir = output_dir
+
+    def __enter__(self):
+        current_time = time.strftime("%Y-%m-%d_%H-%M-%S")
+        self.log_subdir = os.path.join(self.output_dir, current_time)
+        os.makedirs(self.log_subdir, exist_ok=True)
+
+        self.incrementer = Incrementer()
+
+        log_subdir = os.path.join("output/runs", current_time)
+        self.saver = SaveModel(log_subdir, 1)
+        self.writer = SummaryWriter(self.log_subdir, flush_secs=60)
+        self.logger_loss = TrackerAvg('loss/train', self.writer)
+        self.logger_test_loss = TrackerAvg('loss/test', self.writer)
+        self.logger_lr = TrackerAvg('stats/lr', self.writer)
+
+        return self
+
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        self.writer.flush()
+        self.writer.close()
+        torch.cuda.empty_cache()
+        gc.collect()
+
+    def log_train(self):
+        self.logger_loss.log(self.incrementer.count)
+        self.logger_lr.log(self.incrementer.count)
+
+    def log_test(self):
+        self.logger_test_loss.log(self.incrementer.count)
+
+    def increment(self, batch_size=1):
+        self.incrementer.increment(batch_size)

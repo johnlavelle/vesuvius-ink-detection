@@ -2,7 +2,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
-from training1 import FocalLoss
+from vesuvius.ann.criterions import FocalLoss
 
 
 def test_get_focal_weights():

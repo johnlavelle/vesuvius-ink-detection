@@ -8,6 +8,7 @@ import torch
 import xarray as xr
 from torch.utils.data import Dataset
 from xarray import DataArray
+import psutil
 
 from vesuvius.datapoints import Datapoint, DatapointTuple
 from vesuvius.sampler import BaseCropBox, CropBoxSobol, CropBoxRegular, VolumeSamplerRndXYZ, VolumeSamplerRegularZ
@@ -156,19 +157,35 @@ class BaseDataset(ABC, Dataset):
 #         raise NotImplementedError
 
 
+def get_available_memory() -> int:
+    mem = psutil.virtual_memory()
+    return mem.available
+
+
+@lru_cache(maxsize=1)
+def get_dataset(zarr_path):
+    with dask.config.set(scheduler='synchronous'), xr.open_zarr(zarr_path, chunks={'sample': 15}) as ds:
+        if ds.nbytes < 0.7 * get_available_memory():
+            print('Loading dataset into memory...')
+            ds.load()
+        return ds
+
+
 class CachedDataset(Dataset):
     def __init__(self, zarr_path: str, group_size=32, group_pixels=False):
-        with dask.config.set(scheduler='synchronous'), xr.open_zarr(zarr_path) as self.ds:
-            self.ds = self.ds.chunk({'sample': group_size})
-            if group_pixels:
-                self.ds = self.ds.sortby('fxy_idx')
-                index_set = np.unique(self.ds.fxy_idx)
-                np.random.shuffle(index_set)
-                self.hash_mappings = {i: v for i, v in enumerate(index_set)}
-                self.ds_grp = self.ds.groupby('fxy_idx')
-            else:
-                self.ds_grp = self.ds.groupby(self.ds.sample // group_size)
-                self.hash_mappings = None
+        self.ds = get_dataset(zarr_path)
+
+        if group_pixels:
+            index_set, counts = np.unique(self.ds.fxy_idx, return_counts=True)
+            max_count = np.max(counts)
+            index_set = index_set[counts == max_count]
+            np.random.shuffle(index_set)
+            self.hash_mappings = {i: v for i, v in enumerate(index_set)}
+
+            self.ds_grp = self.ds.groupby('fxy_idx')
+        else:
+            self.ds_grp = self.ds.groupby(self.ds.sample // group_size)
+            self.hash_mappings = None
 
     def idx_mapping(self, index: int) -> int:
         if self.hash_mappings:

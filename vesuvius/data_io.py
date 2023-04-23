@@ -65,6 +65,7 @@ def dataset_to_zarr(dataset: xr.Dataset, zarr_path: str, append_dim: str) -> Non
         dataset.to_zarr(zarr_path, mode=mode, encoding=encodings_, consolidated=True, compute=True,
                         append_dim=append_dim)
     except ValueError:
+        raise
         print('Skipping', zarr_path)
 
 

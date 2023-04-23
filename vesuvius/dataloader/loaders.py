@@ -92,9 +92,8 @@ def cached_data_loader(cfg: Configuration1, reset_cache: bool = False) -> Datase
             parameters = {k: xr.DataArray(v, dims=('sample', 'empty'), coords=coords) for k, v in dp.items() if
                           k not in samples_labels.keys()}
             ds = xr.Dataset({**samples_labels, **parameters})
-            if len(ds.sample) > 1:
-                for k in ['fragment', 'x_start', 'x_stop', 'y_start', 'y_stop', 'z_start', 'z_stop', 'fxy_idx']:
-                    ds[k] = ds[k].squeeze()
+            for k in ['fragment', 'x_start', 'x_stop', 'y_start', 'y_stop', 'z_start', 'z_stop', 'fxy_idx']:
+                ds[k] = ds[k].squeeze('empty', drop=True)
             ds = ds.assign_coords(fragment=ds.fragment,
                                   x_start=ds.x_start,
                                   x_stop=ds.x_stop,
@@ -165,7 +164,8 @@ def get_train_loader_regular_z(cfg: dataclass, force_cache_reset) -> DataLoader:
     return get_train_loader(cfg, cached=True, reset_cache=force_cache_reset, worker_init='same')
 
 
-def get_train_loaders(cfg, epochs, cached_data, force_cache_reset, reset_cache_epoch_interval) -> Generator[Datapoint, None, None]:
+def get_train_loaders(cfg, epochs, cached_data, force_cache_reset, reset_cache_epoch_interval) \
+        -> Generator[Datapoint, None, None]:
     for epoch in range(epochs):
         reset_cache = cached_data and (epoch != 0 and epoch % reset_cache_epoch_interval == 0)
         reset_cache = reset_cache or (epoch == 0 and force_cache_reset)

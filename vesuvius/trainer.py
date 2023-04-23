@@ -1,58 +1,22 @@
-import gc
 import json
-import os
+import multiprocessing as mp
 import pprint
-import time
 from abc import ABC, abstractmethod
-from dataclasses import dataclass
-from itertools import islice
-from typing import Any, Generator, Callable, Type, Protocol
+from typing import Generator, Callable, Type
 
+import numpy as np
 import torch
-from torch import nn as nn
-from torch.optim import Optimizer
-from torch.utils.tensorboard import SummaryWriter
 from tqdm import tqdm
+from xarray import DataArray
 
-from vesuvius.data_io import SaveModel
-from vesuvius.trackers import Incrementer, TrackerAvg
-
-
-class TrainingResources:
-    def __init__(self, output_dir="output/runs"):
-        self.output_dir = output_dir
-
-    def __enter__(self):
-        current_time = time.strftime("%Y-%m-%d_%H-%M-%S")
-        self.log_subdir = os.path.join(self.output_dir, current_time)
-        os.makedirs(self.log_subdir, exist_ok=True)
-
-        log_subdir = os.path.join("output/runs", current_time)
-        self.saver = SaveModel(log_subdir, 1)
-        self.writer = SummaryWriter(self.log_subdir, flush_secs=60)
-        self.incrementer = Incrementer()
-        self.logger_loss = TrackerAvg('loss/train', self.writer)
-        self.logger_test_loss = TrackerAvg('loss/test', self.writer)
-        self.logger_lr = TrackerAvg('stats/lr', self.writer)
-
-        return self
-
-    def __exit__(self, exc_type, exc_val, exc_tb):
-        self.writer.flush()
-        self.writer.close()
-        torch.cuda.empty_cache()
-        gc.collect()
+from vesuvius.ann.models import HybridModel
+from vesuvius.ann.optimisers import OptimiserScheduler
+from vesuvius.config import Configuration1, ConfigProtocol
+from vesuvius.trackers import Track
 
 
-class OptimiserScheduler(Protocol):
-    def __init__(self, model: nn.Module, learning_rate: float, total_steps: int):
-        ...
-
-    def optimizer(self) -> Optimizer:
-        ...
-
-    def scheduler(self, optimizer: Optimizer) -> Any:
-        ...
+def centre_pixel(da: DataArray) -> DataArray:
+    return da.isel(x=len(da.x) // 2, y=len(da.y) // 2).astype(np.float32)
 
 
 class BaseTrainer(ABC):
@@ -60,17 +24,21 @@ class BaseTrainer(ABC):
     def __init__(self,
                  train_loader: Callable,
                  test_loader: Callable,
-                 resources: TrainingResources,
+                 trackers: Track,
                  optimizer_scheduler: Type[OptimiserScheduler],
                  criterion: Callable,
+                 config_kwargs: ConfigProtocol,
                  criterion_validate: Callable = None,
                  learning_rate: float = 0.03,
                  l1_lambda: float = 0,
                  epochs: int = 1,
-                 model_kwargs: dict = None,
-                 config_kwargs: dict = None) -> None:
+                 validation_steps: int = 20,
+                 model_kwargs: dict = None) -> None:
 
         self.epochs = epochs
+        self.validation_steps = validation_steps
+        self.train_loader = train_loader
+        self.test_loader = test_loader
 
         if model_kwargs is None:
             model_kwargs = {}
@@ -81,13 +49,13 @@ class BaseTrainer(ABC):
             criterion_validate = criterion
         self.criterion_validate = criterion_validate
         self.learning_rate = learning_rate
-        self.resource = resources
+        self.trackers = trackers
         self.datapoint = self.outputs = None
         self.l1_lambda = l1_lambda
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
         print(f'Using device: {self.device}', '\n')
 
-        self.config = self._default_config(**config_kwargs)
+        self.config = self.configuration(**config_kwargs)
 
         self.model = self.config.model(**model_kwargs).to(self.device)
         self.batch_size = self.config.batch_size
@@ -104,9 +72,8 @@ class BaseTrainer(ABC):
         print(self.optimizer_scheduler, '\n')
         print(self.criterion_validate, '\n')
 
-        self.train_loader_iter = train_loader(self.config, self.epochs)
-        self.test_loader_iter = test_loader(self.config)
-        self.train_loader_iter = islice(self.train_loader_iter, self.config.training_steps)
+        self.train_loader_iter = None
+        self.test_loader_iter = None
 
     @abstractmethod
     def forward(self) -> torch.Tensor:
@@ -117,13 +84,43 @@ class BaseTrainer(ABC):
         ...
 
     @abstractmethod
-    def _check_model(self) -> None:
+    def dummy_input(self) -> torch.Tensor:
         ...
 
+    def _check_model(self) -> None:
+        try:
+            self.model.eval()
+            with torch.no_grad():
+                output = self.model.forward(*self.dummy_input())
+                assert output.shape == (self.config.batch_size, 1)
+        except RuntimeError as e:
+            raise RuntimeError(f'{e}\n'
+                               'Model is not compatible with the input data size')
+
     @staticmethod
-    @abstractmethod
-    def _default_config(**kwargs) -> dataclass:
-        ...
+    def configuration(**kwargs) -> Configuration1:
+        xl, yl = 2048, 7168  # lower left corner of the test box
+        width, height = 2045, 2048
+        default_config = dict(info="",
+                              model=HybridModel,
+                              volume_dataset_cls=None,
+                              crop_box_cls=None,
+                              label_fn=centre_pixel,
+                              training_steps=32 * (40_000 // 32) - 1,  # This should be small enough to fit on disk
+                              batch_size=32,
+                              fragments=[1, 2, 3],
+                              test_box=(xl, yl, xl + width, yl + height),  # Hold back rectangle
+                              test_box_fragment=2,  # Hold back fragment
+                              box_width_xy=91,
+                              box_width_z=6,
+                              balance_ink=True,
+                              shuffle=True,
+                              group_pixels=False,
+                              num_workers=max(1, mp.cpu_count() - 1),
+                              prefix='/data/kaggle/input/vesuvius-challenge-ink-detection/train/',
+                              suffix_cache='sobol',
+                              collate_fn=None)
+        return Configuration1(**{**default_config, **kwargs})
 
     @abstractmethod
     def validate(self) -> None:
@@ -131,26 +128,26 @@ class BaseTrainer(ABC):
 
     def save_model_output(self):
         self.config.update_nn_kwargs(self.optimizer, self.scheduler, self.criterion, self.learning_rate, self.epochs)
-        self.config['performance_dict'] = {'loss/train': self.resource.logger_loss.average,
-                                           'loss/test': self.resource.logger_test_loss.average,
-                                           'steps': self.resource.incrementer.count}
-        self.resource.saver.model(self.model)
-        json_file_path = self.resource.saver.config(self.config)
+        self.config['performance_dict'] = {'loss/train': self.trackers.logger_loss.average,
+                                           'loss/test': self.trackers.logger_test_loss.average,
+                                           'steps': self.trackers.incrementer.count}
+        self.trackers.saver.model(self.model)
+        json_file_path = self.trackers.saver.config(self.config)
         with open(json_file_path, 'r') as file:
             data = json.load(file)
         config_json = json.dumps(data, indent=4)
-        self.resource.writer.add_text('config', config_json)
+        self.trackers.writer.add_text('config', config_json)
 
     def trainer_generator(self) -> Generator[Type['BaseTrainer'], None, None]:
-        while self.resource.incrementer.loop < self.loops:
+        while self.trackers.incrementer.loop < self.loops:
             next(self)
             yield self
 
     def __next__(self) -> 'BaseTrainer':
-        if self.resource.incrementer.loop >= self.loops:
+        if self.trackers.incrementer.loop >= self.loops:
             raise StopIteration
         self.datapoint = next(self.train_loader_iter)
-        self.resource.incrementer.increment(len(self.datapoint.label))
+        self.trackers.increment(len(self.datapoint.label))
         return self
 
     def __iter__(self):
@@ -162,7 +159,7 @@ class BaseTrainer(ABC):
             raise
 
     def __str__(self) -> str:
-        loop = self.resource.incrementer.loop
+        loop = self.trackers.incrementer.loop
         lr = self.learning_rate
         epochs = self.epochs
         batch_size = self.batch_size
@@ -170,7 +167,7 @@ class BaseTrainer(ABC):
 
     def __repr__(self) -> str:
         classname = self.__class__.__name__
-        loop = self.resource.incrementer.loop
+        loop = self.trackers.incrementer.loop
         lr = self.learning_rate
         epochs = self.epochs
         batch_size = self.batch_size
