@@ -1,7 +1,6 @@
 import pprint
 from functools import partial
 from itertools import islice
-from typing import Tuple
 
 import dask
 import torch
@@ -11,9 +10,7 @@ from vesuvius.ann.criterions import FocalLoss
 from vesuvius.ann.models import HybridModel
 from vesuvius.ann.optimisers import SGDOneCycleLR
 from vesuvius.dataloader import test_loader, get_train_loaders
-from vesuvius.datapoints import Datapoint, DatapointTuple
-from vesuvius.fragment_dataset import BaseDataset
-from vesuvius.sampler import CropBoxSobol
+from vesuvius.sampler import CropBoxSobol, SampleXYZ
 from vesuvius.trackers import Track
 from vesuvius.trainer import BaseTrainer
 from vesuvius.utils import timer
@@ -75,26 +72,13 @@ dask.config.set(scheduler='synchronous')
 
 # Data Processing
 
-class SampleXYZ(BaseDataset):
-
-    def get_datapoint(self, index: int) -> DatapointTuple:
-        rnd_slice = self.get_volume_slice(index)
-        slice_xy = {key: value for key, value in rnd_slice.items() if key in ('x', 'y')}
-        label = self.ds.labels.sel(**slice_xy).transpose('x', 'y')
-        voxels = self.ds.images.sel(**rnd_slice).transpose('z', 'x', 'y')
-        voxels = voxels.expand_dims('Cin')
-        # voxels = self.normalise_voxels(voxels)
-        # voxels = voxels.expand_dims('Cin')
-        s = rnd_slice
-        dp = Datapoint(voxels, int(self.label_operation(label)), self.ds.fragment,
-                       s['x'].start, s['x'].stop, s['y'].start, s['y'].stop, s['z'].start, s['z'].stop)
-        return dp.to_namedtuple()
-
 
 class Trainer1(BaseTrainer):
 
     def __init__(self, *args, **kwargs) -> None:
         super().__init__(*args, **kwargs)
+
+    def get_train_test_loaders(self) -> None:
         self.test_loader_iter = lambda length: islice(self.test_loader(self.config), length)
         self.train_loader_iter = self.train_loader(self.config, self.epochs)
         self.train_loader_iter = islice(self.train_loader_iter, self.config.training_steps)
@@ -134,15 +118,6 @@ class Trainer1(BaseTrainer):
         self.trackers.logger_loss.update(loss.item(), batch_size)
         self.trackers.logger_lr.update(self.scheduler.get_last_lr()[0], batch_size)
         return self
-
-    def dummy_input(self) -> Tuple[torch.Tensor, torch.Tensor]:
-        tensor_input = torch.randn(self.config.batch_size,
-                                   1,
-                                   self.config.box_width_z,
-                                   self.config.box_width_xy,
-                                   self.config.box_width_xy).to(self.device)
-        scalar_input = torch.tensor([2.0] * self.config.batch_size).to(self.device).view(-1, 1).to(self.device)
-        return tensor_input, scalar_input
 
 
 config_kwargs = dict(training_steps=32 * (40000 // 32) - 1,

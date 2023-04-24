@@ -128,6 +128,7 @@ class BinaryClassifier(nn.Module):
         x = torch.flatten(x, start_dim=1)
         if self.input_layer is None:
             self.input_layer = nn.Linear(x.shape[1], 64)
+            self.input_layer.to(x.device)
         x = self.input_layer(x)
         x = self.relu1(x)
         x = self.fc2(x)

@@ -165,8 +165,8 @@ def get_available_memory() -> int:
 @lru_cache(maxsize=1)
 def get_dataset(zarr_path):
     with dask.config.set(scheduler='synchronous'), xr.open_zarr(zarr_path, chunks={'sample': 15}) as ds:
-        if ds.nbytes < 0.7 * get_available_memory():
-            print('Loading dataset into memory...')
+        if ds.nbytes < 0.7 * get_available_memory() and False:
+            print('Loading dataset into memory...', '\n')
             ds.load()
         return ds
 
@@ -210,4 +210,4 @@ class CachedDataset(Dataset):
                          ds['z_stop']).to_namedtuple()
 
     def __len__(self):
-        return len(self.ds_grp)
+        return len(self.hash_mappings)
