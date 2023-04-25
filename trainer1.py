@@ -10,7 +10,8 @@ from vesuvius.ann.criterions import FocalLoss
 from vesuvius.ann.models import HybridModel
 from vesuvius.ann.optimisers import SGDOneCycleLR
 from vesuvius.dataloader import test_loader, get_train_loaders
-from vesuvius.sampler import CropBoxSobol, SampleXYZ
+from vesuvius.sample_processors import SampleXYZ
+from vesuvius.sampler import CropBoxSobol
 from vesuvius.trackers import Track
 from vesuvius.trainer import BaseTrainer
 from vesuvius.utils import timer
@@ -120,7 +121,11 @@ class Trainer1(BaseTrainer):
         return self
 
 
+xl, yl = 2048, 7168  # lower left corner of the test box
+width, height = 2045, 2048
 config_kwargs = dict(training_steps=32 * (40000 // 32) - 1,
+                     test_box=(xl, yl, xl + width, yl + height),  # Hold back rectangle
+                     test_box_fragment=2,  # Hold back fragment
                      model=HybridModel,
                      volume_dataset_cls=SampleXYZ,
                      crop_box_cls=CropBoxSobol)
@@ -131,7 +136,6 @@ if __name__ == '__main__':
     dask.config.set(scheduler='synchronous')
     print('Tensorboard URL: ', tensorboard_access.get_public_url(), '\n')
 
-    CACHED_DATA = True
     FORCE_CACHE_RESET = False  # Deletes cache. Only used if CACHED_DATA is True.
     EPOCHS = 2
     RESET_CACHE_EPOCH_INTERVAL = EPOCHS
@@ -141,7 +145,7 @@ if __name__ == '__main__':
 
     train_loaders = partial(
         get_train_loaders,
-        cached_data=CACHED_DATA,
+        cached_data=True,
         force_cache_reset=FORCE_CACHE_RESET,
         reset_cache_epoch_interval=RESET_CACHE_EPOCH_INTERVAL)
 

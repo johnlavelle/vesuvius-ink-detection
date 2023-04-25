@@ -6,9 +6,6 @@ import numpy as np
 import xarray as xr
 from scipy.stats import qmc
 
-from vesuvius.datapoints import DatapointTuple, Datapoint
-from vesuvius.fragment_dataset import BaseDataset
-
 from vesuvius.utils import vectorise_raster, check_points_in_polygon
 
 
@@ -17,13 +14,8 @@ sys.setrecursionlimit(50_000)
 
 class BaseCropBox(ABC):
 
-    def __init__(self,
-                 total_bounds: Tuple[int, int, int, int, int, int],
-                 width_xy: int,
-                 width_z: int,
-                 seed: int = 42,
-                 stride_xy: int = None,
-                 stride_z: int = None):
+    def __init__(self, total_bounds: Tuple[int, int, int, int, int, int], width_xy: int, width_z: int,
+                 stride_xy: int = None, stride_z: int = None, seed: int = 42):
         """
         :param total_bounds: (x_min, x_max, y_min, y_max, z_min, z_max)
         :param width_xy:
@@ -59,19 +51,14 @@ class BaseCropBox(ABC):
 
 class CropBoxSobol(BaseCropBox):
 
-    def __init__(self,
-                 total_bounds: Tuple[int, int, int, int, int, int],
-                 width_xy: int,
-                 width_z: int,
-                 seed: int = 42,
-                 stride_xy=None,
-                 stride_z=None):
+    def __init__(self, total_bounds: Tuple[int, int, int, int, int, int], width_xy: int, width_z: int, stride_xy=None,
+                 stride_z=None, seed: int = 42):
         """
         :param total_bounds: (x_min, x_max, y_min, y_max, z_min, z_max)
         :param width_xy:
         :param width_z:
         """
-        super().__init__(total_bounds, width_xy, width_z, seed, stride_xy, stride_z)
+        super().__init__(total_bounds, width_xy, width_z, stride_xy, stride_z, seed)
 
         if self.stride_xy is not None and self.stride_z is not None:
             raise NotImplementedError("Stride is not implemented for Sobol sampler")
@@ -96,19 +83,14 @@ class CropBoxSobol(BaseCropBox):
 
 class CropBoxRegular(BaseCropBox):
 
-    def __init__(self,
-                 total_bounds: Tuple[int, int, int, int, int, int],
-                 width_xy: int,
-                 width_z: int,
-                 seed: int = 42,
-                 stride_xy=None,
-                 stride_z=None):
+    def __init__(self, total_bounds: Tuple[int, int, int, int, int, int],
+                 width_xy: int, width_z: int, stride_xy=None, stride_z=None, seed: int = 42):
         """
         :param total_bounds:
         :param width_xy:
         :param width_z:
         """
-        super().__init__(total_bounds, width_xy, width_z, seed, stride_xy, stride_z)
+        super().__init__(total_bounds, width_xy, width_z, stride_xy, stride_z, seed)
 
         if self.stride_xy is None and self.stride_z is None:
             self.stride_xy = width_xy
@@ -120,6 +102,7 @@ class CropBoxRegular(BaseCropBox):
         self.u_bounds = np.array([self.bounds[3] - self.width_xy,
                                   self.bounds[4] - self.width_xy,
                                   self.bounds[5] - self.width_z])
+        seed = 98  # Override seed
         rng = np.random.default_rng(seed) if seed is not None else None
         self.sampler = list(self.xyz_sampler(self.l_bounds, self.u_bounds, self.stride_xy, self.stride_z, rng))
 
@@ -150,16 +133,8 @@ class CropBoxRegular(BaseCropBox):
 
 class BaseVolumeSampler(ABC):
 
-    def __init__(self,
-                 dataset: xr.Dataset,
-                 box_width: int,
-                 z_width: int,
-                 samples: int = None,
-                 balance=True,
-                 crop_cls: Type[BaseCropBox] = CropBoxSobol,
-                 seed=42,
-                 stride_xy=None,
-                 stride_z=None):
+    def __init__(self, dataset: xr.Dataset, box_width: int, z_width: int, samples: int = None, balance=True,
+                 crop_cls: Type[BaseCropBox] = CropBoxSobol, stride_xy=None, stride_z=None, seed=42):
 
         self.ds = dataset
         self.mask_array = self.ds.full_mask
@@ -177,7 +152,7 @@ class BaseVolumeSampler(ABC):
         z_upper = self.ds.coords['z'][-1].item()
         bounds = (x_lower, y_lower, z_lower, x_upper, y_upper, z_upper)
         self.z_upper_max = self.ds.z[-1].item() - self.z_width
-        self.crop_box = crop_cls(bounds, self.box_width, self.z_width, seed, stride_xy, stride_z)
+        self.crop_box = crop_cls(bounds, self.box_width, self.z_width, stride_xy, stride_z, seed)
         self.samples = samples
         self.running_samples = 0
 
@@ -247,18 +222,10 @@ class VolumeSamplerRndXYZ(BaseVolumeSampler):
 
 class VolumeSamplerRegularZ(BaseVolumeSampler):
 
-    def __init__(self,
-                 dataset: xr.Dataset,
-                 box_width: int,
-                 z_width: int,
-                 samples: int = None,
-                 balance=True,
-                 crop_cls: Type[BaseCropBox] = CropBoxSobol,
-                 seed=42,
-                 stride_xy=None,
-                 stride_z=None):
+    def __init__(self, dataset: xr.Dataset, box_width: int, z_width: int, samples: int = None, balance=True,
+                 crop_cls: Type[BaseCropBox] = CropBoxSobol, stride_xy=None, stride_z=None, seed=42):
         # use super to set up the crop box
-        super().__init__(dataset, box_width, z_width, samples, balance, crop_cls, seed, stride_xy, stride_z)
+        super().__init__(dataset, box_width, z_width, samples, balance, crop_cls, stride_xy, stride_z, seed)
         self.crop_box.sampler = self.reduce_samples(self.crop_box.sampler)
 
     def reduce_samples(self, crop_box_sampler):
@@ -294,17 +261,3 @@ class VolumeSamplerRegularZ(BaseVolumeSampler):
         return len(self.crop_box)
 
 
-class SampleXYZ(BaseDataset):
-
-    def get_datapoint(self, index: int) -> DatapointTuple:
-        rnd_slice = self.get_volume_slice(index)
-        slice_xy = {key: value for key, value in rnd_slice.items() if key in ('x', 'y')}
-        label = self.ds.labels.sel(**slice_xy).transpose('x', 'y')
-        voxels = self.ds.images.sel(**rnd_slice).transpose('z', 'x', 'y')
-        voxels = voxels.expand_dims('Cin')
-        # voxels = self.normalise_voxels(voxels)
-        # voxels = voxels.expand_dims('Cin')
-        s = rnd_slice
-        dp = Datapoint(voxels, int(self.label_operation(label)), self.ds.fragment,
-                       s['x'].start, s['x'].stop, s['y'].start, s['y'].stop, s['z'].start, s['z'].stop)
-        return dp.to_namedtuple()

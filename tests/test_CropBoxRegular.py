@@ -7,7 +7,7 @@ def test_crop_box_regular_get_sample():
     width_xy = 4
     width_z = 4
     seed = 42
-    crop_box = CropBoxRegular(total_bounds, width_xy, width_z, seed)
+    crop_box = CropBoxRegular(total_bounds, width_xy, width_z, seed=seed)
     expected = [
         (0, 3, 0, 3, 0, 3),
         (0, 3, 0, 3, 4, 7),

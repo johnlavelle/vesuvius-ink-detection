@@ -78,3 +78,7 @@ def timer(name):
     end_time = default_timer()
     elapsed_time = end_time - start_time
     print(f"{name} took {elapsed_time:.1f} seconds")
+
+
+class CustomDataLoaderError(Exception):
+    pass

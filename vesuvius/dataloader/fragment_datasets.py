@@ -5,7 +5,6 @@ import xarray as xr
 from vesuvius.config import Configuration1
 from vesuvius.data_io import read_dataset_from_zarr
 from vesuvius.fragment_dataset import BaseDataset
-from vesuvius.utils import get_hold_back_mask
 from .weightings import WeightedSamples
 
 
@@ -37,11 +36,7 @@ class XarrayDatasetIter(DatasetIter):
 
         data = read_dataset_from_zarr(str(fragment), self.config.num_workers, self.config.prefix)
         data.attrs['fragment'] = fragment
-
-        if fragment == self.test_box_fragment:
-            data['full_mask'] = get_hold_back_mask(data, self.config.test_box)
-        else:
-            data['full_mask'] = data['mask']
+        data['full_mask'] = data['mask']
 
         return data
 

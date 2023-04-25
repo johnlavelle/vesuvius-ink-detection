@@ -2,8 +2,8 @@ from abc import ABC, abstractmethod
 from functools import lru_cache
 from typing import Any, Callable, Type, Union
 
-import dask
 import numpy as np
+from scipy import stats
 import torch
 import xarray as xr
 from torch.utils.data import Dataset
@@ -12,6 +12,7 @@ import psutil
 
 from vesuvius.datapoints import Datapoint, DatapointTuple
 from vesuvius.sampler import BaseCropBox, CropBoxSobol, CropBoxRegular, VolumeSamplerRndXYZ, VolumeSamplerRegularZ
+from vesuvius.utils import CustomDataLoaderError
 
 
 class BaseDataset(ABC, Dataset):
@@ -25,9 +26,9 @@ class BaseDataset(ABC, Dataset):
                  transformer: Callable[[torch.Tensor], DataArray] = None,
                  crop_cls: Type[Union[BaseCropBox, CropBoxSobol, CropBoxRegular]] = CropBoxSobol,
                  balance_ink: bool = False,
-                 seed: int = 42,
                  stride_xy: int = None,
-                 stride_z: int = None):
+                 stride_z: int = None,
+                 seed: int = 42):
         self.ds = dataset
         self.box_width_xy = box_width_xy
         self.box_width_z = box_width_z
@@ -58,9 +59,9 @@ class BaseDataset(ABC, Dataset):
                                        self.max_iterations,
                                        balance=self.balance_ink,
                                        crop_cls=self.crop_box_cls,
-                                       seed=seed,
                                        stride_xy=self.stride_xy,
-                                       stride_z=self.stride_z)
+                                       stride_z=self.stride_z,
+                                       seed=seed)
 
     @property
     def seed(self) -> int:
@@ -80,16 +81,15 @@ class BaseDataset(ABC, Dataset):
         self._indexes.add(idx)
         return self.sampler[idx]
 
-    def __getitem__(self, index: int) -> Union[Datapoint, IndexError]:
+    def __getitem__(self, index: int) -> Union[Datapoint, CustomDataLoaderError]:
         worker_info = torch.utils.data.get_worker_info()
         if worker_info is not None:
             self.seed = worker_info.seed
-
         try:
             datapoint = self.get_datapoint(index)
             return datapoint
         except IndexError as err:
-            return err
+            return CustomDataLoaderError(str(err))
 
     def __len__(self) -> int:
         if self.max_iterations is None:
@@ -162,25 +162,17 @@ def get_available_memory() -> int:
     return mem.available
 
 
-@lru_cache(maxsize=1)
-def get_dataset(zarr_path):
-    with dask.config.set(scheduler='synchronous'), xr.open_zarr(zarr_path, chunks={'sample': 15}) as ds:
-        if ds.nbytes < 0.7 * get_available_memory() and False:
-            print('Loading dataset into memory...', '\n')
-            ds.load()
-        return ds
-
-
 class CachedDataset(Dataset):
-    def __init__(self, zarr_path: str, group_size=32, group_pixels=False):
-        self.ds = get_dataset(zarr_path)
+    def __init__(self, dataset: xr.Dataset, group_size=32, group_pixels=False):
+
+        self.ds = dataset
 
         if group_pixels:
             index_set, counts = np.unique(self.ds.fxy_idx, return_counts=True)
-            max_count = np.max(counts)
-            index_set = index_set[counts == max_count]
+            mode_count = stats.mode(counts, keepdims=True)
+            index_set_reduced = index_set[counts == mode_count.mode[0]]
             np.random.shuffle(index_set)
-            self.hash_mappings = {i: v for i, v in enumerate(index_set)}
+            self.hash_mappings = {i: v for i, v in enumerate(index_set_reduced)}
 
             self.ds_grp = self.ds.groupby('fxy_idx')
         else:

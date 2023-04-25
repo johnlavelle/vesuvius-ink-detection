@@ -1,6 +1,5 @@
 import pprint
-from functools import partial
-from itertools import islice, repeat, chain
+from itertools import repeat, chain, cycle, islice
 
 import dask
 import torch
@@ -11,8 +10,8 @@ import tensorboard_access
 from vesuvius import ann
 from vesuvius.ann.optimisers import SGDOneCycleLR
 from vesuvius.dataloader import get_train_loader_regular_z
-from vesuvius.dataloader import get_train_loaders
-from vesuvius.sampler import CropBoxRegular, SampleXYZ
+from vesuvius.sample_processors import SampleXYZ
+from vesuvius.sampler import CropBoxRegular
 from vesuvius.trackers import Track
 from vesuvius.trainer import BaseTrainer
 from vesuvius.utils import timer
@@ -37,15 +36,16 @@ class JointTrainer(BaseTrainer):
         self.criterion2 = None
         self.train_loader_iter = None
         self.test_loader_iter = None
-        self.outputs_collected = []
-        self.labels_collected = []
         self.labels = None
         self.output2 = None
+        self.test_loader_len = None
+        self.outputs_collected = []
+        self.labels_collected = []
 
         self.setup_model2()
         self.get_train_test_loaders()
 
-    def setup_model2(self):
+    def setup_model2(self) -> None:
         self.model2 = ann.models.BinaryClassifier().to(self.device)
         self.optimizer_scheduler2 = self.optimizer_scheduler_cls(self.model2, self.learning_rate, self.total)
         self.optimizer2 = self.optimizer_scheduler2.optimizer()
@@ -56,14 +56,19 @@ class JointTrainer(BaseTrainer):
     def get_train_test_loaders(self) -> None:
         self.batch_size = round(self.config.batch_size / ((65 - self.config.stride_z) / self.config.stride_z + 1))
 
-        dataloader = DataLoader(self.train_loader(self.config, False),
-                                batch_size=self.batch_size,
-                                num_workers=self.config.num_workers)
+        dataloader_train = DataLoader(self.train_loader(self.config, False, test_data=False),
+                                      batch_size=self.batch_size,
+                                      num_workers=self.config.num_workers)
+        self.total = self.epochs * len(dataloader_train) * self.batch_size
+        self.loops = self.epochs * len(dataloader_train)
+        self.train_loader_iter = chain.from_iterable(repeat(dataloader_train, self.epochs))
 
-        self.total = self.epochs * len(dataloader) * self.batch_size
-        self.loops = self.epochs * len(dataloader)
-        self.train_loader_iter = chain.from_iterable(repeat(dataloader, self.epochs))
-        self.test_loader_iter = lambda n: islice(iter(self.test_loader(self.config, False)), n)
+        test_loader = DataLoader(self.train_loader(self.config, False, test_data=True),
+                                 batch_size=self.batch_size,
+                                 num_workers=self.config.num_workers)
+
+        self.test_loader_len = len(test_loader)
+        self.test_loader_iter = cycle(iter(test_loader))
 
     def _apply_forward(self, datapoint) -> torch.Tensor:
         voxels = datapoint.voxels
@@ -74,6 +79,8 @@ class JointTrainer(BaseTrainer):
 
     def forward(self) -> 'BaseTrainer':
         self.model.train()
+        self.trackers.increment(train.datapoint.label.shape[0])
+
         self.outputs_collected = []
         self.labels_collected = []
         for _ in range(5):
@@ -84,13 +91,15 @@ class JointTrainer(BaseTrainer):
         self.labels = torch.cat(train.labels_collected, dim=0)
         return self
 
-    def forward2(self):
+    def forward2(self) -> None:
+        self.model2.train()
         self.output2 = self.model2(self.outputs)
 
     def loss(self) -> 'BaseTrainer':
+        self.model2.train()
         self.labels = self.labels.to(self.device)
         loss2 = self.criterion2(self.output2, self.labels)
-        self.trackers.logger_loss.update(loss2.item(), self.labels.shape[0])
+        self.trackers.update_train(loss2.item(), self.labels.shape[0])
         self.optimizer.zero_grad()
         self.optimizer2.zero_grad()
         loss2.backward()
@@ -100,49 +109,52 @@ class JointTrainer(BaseTrainer):
 
     def validate(self) -> 'BaseTrainer':
         self.model.eval()
+        self.model2.eval()
         with torch.no_grad():
-            for datapoint_test in self.test_loader_iter(self.validation_steps):
-                voxels = datapoint_test
-                voxels = voxels.reshape(self.datapoint.label.shape[:2])
-                outputs = self._apply_forward(datapoint_test)
-                val_loss = self.criterion_validate(outputs, datapoint_test.label.float().to(self.device))
-                batch_size = len(datapoint_test.label)
-                self.trackers.logger_test_loss.update(val_loss.item(), batch_size)
-        self.trackers.log_test()
+            for i, datapoint_test in enumerate(islice(self.test_loader_iter, 20)):
+                if i >= self.test_loader_len:
+                    break
+                output = self._apply_forward(datapoint_test)
+                output = output.reshape(self.datapoint.label.shape[:2])
+                output2 = self.model2(output)
+                labels = datapoint_test.label.float().mean(dim=1)
+                labels = labels.to(self.device)
+                val_loss = self.criterion2(output2, labels)
+                self.trackers.update_test(val_loss.item(), len(labels))
+                self.trackers.update_lr(self.optimizer.param_groups[0]['lr'])
         return self
 
 
 # get_train_loader_regular_z = partial(get_train_loader_regular_z, force_cache_reset=False)
 
 if __name__ == '__main__':
-    print('Tensorboard URL: ', tensorboard_access.get_public_url(), '\n')
+    try:
+        print('Tensorboard URL: ', tensorboard_access.get_public_url(), '\n')
+    except RuntimeError:
+        print('Failed to get public tensorboard URL')
 
-    CACHED_DATA = True
-    FORCE_CACHE_RESET = False  # Deletes cache. Only used if CACHED_DATA is True.
-    EPOCHS = 1000
-    RESET_CACHE_EPOCH_INTERVAL = EPOCHS
-    VALIDATE_INTERVAL = 1000
+    EPOCHS = 20
+    VALIDATE_INTERVAL = 100
     LOG_INTERVAL = 100
 
-    train_dataset = partial(
-        get_train_loaders,
-        cached_data=CACHED_DATA,
-        force_cache_reset=FORCE_CACHE_RESET,
-        reset_cache_epoch_interval=RESET_CACHE_EPOCH_INTERVAL)
+    xl, yl = 2048, 7168  # lower left corner of the test box
+    width, height = 2045, 2048
+    config_kwargs = dict(training_steps=10_000,
+                         model=ann.models.HybridModel,
+                         volume_dataset_cls=SampleXYZ,
+                         crop_box_cls=CropBoxRegular,
+                         suffix_cache='regular',
+                         test_box=(xl, yl, xl + width, yl + height),  # Hold back rectangle
+                         test_box_fragment=2,  # Hold back fragment
+                         shuffle=False,
+                         group_pixels=True,
+                         balance_ink=True,
+                         stride_xy=61,
+                         stride_z=6,
+                         num_workers=6)
 
     with Track() as track, Track() as trackers2, timer("Training"):
 
-        config_kwargs = dict(training_steps=1000,
-                             model=ann.models.HybridModel,
-                             volume_dataset_cls=SampleXYZ,
-                             crop_box_cls=CropBoxRegular,
-                             suffix_cache='regular',
-                             shuffle=False,
-                             group_pixels=True,
-                             balance_ink=True,
-                             stride_xy=61,
-                             stride_z=6,
-                             num_workers=6)
         trainer = JointTrainer(get_train_loader_regular_z,
                                get_train_loader_regular_z,
                                track,
@@ -157,13 +169,12 @@ if __name__ == '__main__':
             train.forward()
             train.forward2()
             train.loss()
-            train.validate()
 
             if i == 0:
                 continue
             if i % LOG_INTERVAL == 0:
-                train.trackers.logger_loss.log(i)
-            #     if i % VALIDATE_INTERVAL == 0:
-            #         train.validate()
-            #
-            # train.save_model_output()
+                train.trackers.log_train()
+            if i % VALIDATE_INTERVAL == 0:
+                train.validate()
+                train.trackers.log_test()
+        train.save_model_output()

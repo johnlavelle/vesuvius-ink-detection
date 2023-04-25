@@ -97,12 +97,21 @@ class Track:
         torch.cuda.empty_cache()
         gc.collect()
 
-    def log_train(self):
-        self.logger_loss.log(self.incrementer.count)
-        self.logger_lr.log(self.incrementer.count)
+    def update_train(self, loss, batch_size=1):
+        self.logger_loss.update(loss, batch_size)
+
+    def update_test(self, loss, batch_size=1):
+        self.logger_test_loss.update(loss, batch_size)
+
+    def update_lr(self, lr):
+        self.logger_lr.update(lr, 1)
 
     def log_test(self):
         self.logger_test_loss.log(self.incrementer.count)
+        self.logger_lr.log(self.incrementer.count)
+
+    def log_train(self):
+        self.logger_loss.log(self.incrementer.count)
 
     def increment(self, batch_size=1):
         self.incrementer.increment(batch_size)

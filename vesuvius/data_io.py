@@ -4,10 +4,12 @@ import json
 import os
 import warnings
 from dataclasses import asdict
+from functools import lru_cache
 from os.path import join
-
-from typing import Any
+from typing import Any, Tuple
 from typing import Dict, Union
+
+from vesuvius.fragment_dataset import get_available_memory
 
 try:
     from typing import Literal
@@ -163,3 +165,20 @@ class LoadModel:
 
     def config(self) -> Configuration1:
         return self._config
+
+
+@lru_cache(maxsize=1)
+def get_dataset(zarr_path: str, fragment: Union[int, str], hold_back_box: Tuple[int, int, int, int], test_data=False):
+    xl, yl, xu, yu = hold_back_box
+    with dask.config.set(scheduler='synchronous'), xr.open_zarr(zarr_path, chunks={'sample': 15}) as ds:
+        if ds.nbytes < 0.7 * get_available_memory() and False:
+            print('Loading dataset into memory...', '\n')
+            ds.load()
+        if test_data:
+            hold_back_bool = ((ds.fragment == fragment) &
+                              (ds.x_start >= xl) &
+                              (ds.x_stop <= xu) &
+                              (ds.y_start >= yl) &
+                              (ds.y_stop <= yu)).compute()
+            ds = ds.isel(sample=hold_back_bool)
+        return ds

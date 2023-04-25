@@ -118,7 +118,6 @@ class BaseTrainer(ABC):
             raise RuntimeError(f'{e}\n'
                                'Model is not compatible with the input data size')
 
-
     @staticmethod
     def configuration(**kwargs) -> Configuration1:
         xl, yl = 2048, 7168  # lower left corner of the test box
