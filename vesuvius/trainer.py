@@ -2,11 +2,11 @@ import json
 import multiprocessing as mp
 import pprint
 from abc import ABC, abstractmethod
-from typing import Generator, Callable, Type, Tuple
 
 import numpy as np
 import torch
 from tqdm import tqdm
+from typing import Generator, Callable, Type, Tuple
 from xarray import DataArray
 
 from vesuvius.ann.models import HybridModel
@@ -21,19 +21,10 @@ def centre_pixel(da: DataArray) -> DataArray:
 
 class BaseTrainer(ABC):
 
-    def __init__(self,
-                 train_loader: Callable,
-                 test_loader: Callable,
-                 trackers: Track,
-                 optimizer_scheduler_cls: Type[OptimiserScheduler],
-                 criterion: Callable,
-                 config_kwargs: ConfigProtocol,
-                 criterion_validate: Callable = None,
-                 learning_rate: float = 0.03,
-                 l1_lambda: float = 0,
-                 epochs: int = 1,
-                 validation_steps: int = 20,
-                 model_kwargs: dict = None) -> None:
+    def __init__(self, train_loader: Callable, test_loader: Callable, trackers: Track,
+                 optimizer_scheduler_cls: Type[OptimiserScheduler], criterion: Callable, config_kwargs: ConfigProtocol,
+                 criterion_validate: Callable = None, learning_rate: float = 0.03, l1_lambda: float = 0,
+                 epochs: int = 1, validation_steps: int = 20, model_kwargs: dict = None) -> None:
 
         self.epochs = epochs
         self.validation_steps = validation_steps

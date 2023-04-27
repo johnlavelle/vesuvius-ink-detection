@@ -5,7 +5,7 @@ from itertools import islice
 import dask
 import torch
 
-import tensorboard_access
+from src import tensorboard_access
 from vesuvius.ann.criterions import FocalLoss
 from vesuvius.ann.models import HybridModel
 from vesuvius.ann.optimisers import SGDOneCycleLR
@@ -15,6 +15,7 @@ from vesuvius.sampler import CropBoxSobol
 from vesuvius.trackers import Track
 from vesuvius.trainer import BaseTrainer
 from vesuvius.utils import timer
+
 
 # If READ_EXISTING_CONFIG is False, config is specified in Configuration (below)
 # else config is read from CONFIG_PATH.
@@ -77,7 +78,7 @@ dask.config.set(scheduler='synchronous')
 class Trainer1(BaseTrainer):
 
     def __init__(self, *args, **kwargs) -> None:
-        super().__init__(*args, **kwargs)
+        super().__init__(**kwargs)
 
     def get_train_test_loaders(self) -> None:
         self.test_loader_iter = lambda length: islice(self.test_loader(self.config), length)

@@ -10,8 +10,8 @@ RUN apt-get update && \
     chmod +x /usr/local/bin/ngrok
 
 # Install other packages
-RUN pip install shapely --upgrade
-RUN pip install pytest rioxarray torcharrow torchsampler torchsummary zarr
+RUN pip install shapely --upgrade && \
+    pip install pytest rioxarray torcharrow torchsampler torchsummary zarr
 
 RUN mkdir /kaggle && \
     ln -s /kaggle /data
