@@ -5,10 +5,13 @@ import warnings
 from torch.nn import Module
 from dataclasses import dataclass, field
 from typing import Union, Optional, Callable, List, Tuple, Any, Type
+try:
+    from typing import Protocol
+except ImportError:
+    from typing_extensions import Protocol
 
 from vesuvius.sampler import BaseCropBox, CropBoxRegular
 from vesuvius.fragment_dataset import BaseDataset
-from typing import Protocol, Any
 
 
 @dataclass

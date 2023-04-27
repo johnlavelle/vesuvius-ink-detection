@@ -30,7 +30,7 @@ class JointTrainer(BaseTrainer):
         super().__init__(*args, **kwargs)
 
         self.model2 = None
-        self.optimizer_scheduler2 = None
+        self.os2 = None
         self.optimizer2 = None
         self.scheduler2 = None
         self.criterion2 = None
@@ -47,11 +47,11 @@ class JointTrainer(BaseTrainer):
 
     def setup_model2(self) -> None:
         self.model2 = ann.models.BinaryClassifier().to(self.device)
-        self.optimizer_scheduler2 = self.optimizer_scheduler_cls(self.model2, self.learning_rate, self.total)
-        self.optimizer2 = self.optimizer_scheduler2.optimizer()
-        self.scheduler2 = self.optimizer_scheduler2.scheduler(self.optimizer)
+        self.os2 = self.optimizer_scheduler_cls(self.model2, self.learning_rate, self.total)
+        self.optimizer2 = self.os2.optimizer()
+        self.scheduler2 = self.os2.scheduler()
         self.criterion2 = BCEWithLogitsLoss()
-        print(self.optimizer_scheduler2, '\n')
+        print(self.os2, '\n')
 
     def get_train_test_loaders(self) -> None:
         self.batch_size = round(self.config.batch_size / ((65 - self.config.stride_z) / self.config.stride_z + 1))
@@ -91,12 +91,12 @@ class JointTrainer(BaseTrainer):
         self.labels = torch.cat(train.labels_collected, dim=0)
         return self
 
-    def forward2(self) -> None:
+    def forward2(self) -> 'BaseTrainer':
         self.model2.train()
         self.output2 = self.model2(self.outputs)
+        return self
 
     def loss(self) -> 'BaseTrainer':
-        self.model2.train()
         self.labels = self.labels.to(self.device)
         loss2 = self.criterion2(self.output2, self.labels)
         self.trackers.update_train(loss2.item(), self.labels.shape[0])
@@ -111,9 +111,7 @@ class JointTrainer(BaseTrainer):
         self.model.eval()
         self.model2.eval()
         with torch.no_grad():
-            for i, datapoint_test in enumerate(islice(self.test_loader_iter, 20)):
-                if i >= self.test_loader_len:
-                    break
+            for datapoint_test in islice(self.test_loader_iter, 200):
                 output = self._apply_forward(datapoint_test)
                 output = output.reshape(self.datapoint.label.shape[:2])
                 output2 = self.model2(output)
@@ -121,7 +119,7 @@ class JointTrainer(BaseTrainer):
                 labels = labels.to(self.device)
                 val_loss = self.criterion2(output2, labels)
                 self.trackers.update_test(val_loss.item(), len(labels))
-                self.trackers.update_lr(self.optimizer.param_groups[0]['lr'])
+        self.trackers.update_lr(self.optimizer.param_groups[0]['lr'])
         return self
 
 
@@ -133,13 +131,13 @@ if __name__ == '__main__':
     except RuntimeError:
         print('Failed to get public tensorboard URL')
 
-    EPOCHS = 20
-    VALIDATE_INTERVAL = 100
+    EPOCHS = 1
+    VALIDATE_INTERVAL = 5000
     LOG_INTERVAL = 100
 
     xl, yl = 2048, 7168  # lower left corner of the test box
     width, height = 2045, 2048
-    config_kwargs = dict(training_steps=10_000,
+    config_kwargs = dict(training_steps=10_000_000,
                          model=ann.models.HybridModel,
                          volume_dataset_cls=SampleXYZ,
                          crop_box_cls=CropBoxRegular,
@@ -151,9 +149,9 @@ if __name__ == '__main__':
                          balance_ink=True,
                          stride_xy=61,
                          stride_z=6,
-                         num_workers=6)
+                         num_workers=0)
 
-    with Track() as track, Track() as trackers2, timer("Training"):
+    with Track() as track, timer("Training"):
 
         trainer = JointTrainer(get_train_loader_regular_z,
                                get_train_loader_regular_z,
@@ -166,10 +164,7 @@ if __name__ == '__main__':
                                epochs=EPOCHS)
 
         for i, train in enumerate(trainer):
-            train.forward()
-            train.forward2()
-            train.loss()
-
+            train.forward().forward2().loss()
             if i == 0:
                 continue
             if i % LOG_INTERVAL == 0:

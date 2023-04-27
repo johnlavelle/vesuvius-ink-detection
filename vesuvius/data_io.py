@@ -9,7 +9,7 @@ from os.path import join
 from typing import Any, Tuple
 from typing import Dict, Union
 
-from vesuvius.fragment_dataset import get_available_memory
+import psutil
 
 try:
     from typing import Literal
@@ -67,8 +67,8 @@ def dataset_to_zarr(dataset: xr.Dataset, zarr_path: str, append_dim: str) -> Non
         dataset.to_zarr(zarr_path, mode=mode, encoding=encodings_, consolidated=True, compute=True,
                         append_dim=append_dim)
     except ValueError:
-        raise
         print('Skipping', zarr_path)
+        raise
 
 
 def save_zarr(fragment: int, prefix: str, normalize=True) -> str:
@@ -167,11 +167,17 @@ class LoadModel:
         return self._config
 
 
+def get_available_memory() -> int:
+    mem = psutil.virtual_memory()
+    return mem.available
+
+
 @lru_cache(maxsize=1)
 def get_dataset(zarr_path: str, fragment: Union[int, str], hold_back_box: Tuple[int, int, int, int], test_data=False):
     xl, yl, xu, yu = hold_back_box
     with dask.config.set(scheduler='synchronous'), xr.open_zarr(zarr_path, chunks={'sample': 15}) as ds:
-        if ds.nbytes < 0.7 * get_available_memory() and False:
+        overhead_gb = (get_available_memory() - ds.nbytes) / (1024 * 1024 * 1024)
+        if overhead_gb > 2:
             print('Loading dataset into memory...', '\n')
             ds.load()
         if test_data:
@@ -182,3 +188,6 @@ def get_dataset(zarr_path: str, fragment: Union[int, str], hold_back_box: Tuple[
                               (ds.y_stop <= yu)).compute()
             ds = ds.isel(sample=hold_back_bool)
         return ds
+
+
+

@@ -1,4 +1,4 @@
-FROM kaggle/python
+FROM kaggle/python-build
 
 # Install ngrok
 RUN apt-get update && \
@@ -9,13 +9,16 @@ RUN apt-get update && \
     mv ngrok /usr/local/bin/ngrok && \
     chmod +x /usr/local/bin/ngrok
 
-EXPOSE 4040
-EXPOSE 80
-EXPOSE 443
-
 # Install other packages
 RUN pip install shapely --upgrade
 RUN pip install pytest rioxarray torcharrow torchsampler torchsummary zarr
+
+RUN mkdir /kaggle && \
+    ln -s /kaggle /data
+
+EXPOSE 4040
+EXPOSE 80
+EXPOSE 443
 
 # Start ngrok
 #CMD ngrok http 80

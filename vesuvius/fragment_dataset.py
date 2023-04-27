@@ -1,14 +1,13 @@
 from abc import ABC, abstractmethod
+from collections import Counter
 from functools import lru_cache
 from typing import Any, Callable, Type, Union
 
 import numpy as np
-from scipy import stats
 import torch
 import xarray as xr
 from torch.utils.data import Dataset
 from xarray import DataArray
-import psutil
 
 from vesuvius.datapoints import Datapoint, DatapointTuple
 from vesuvius.sampler import BaseCropBox, CropBoxSobol, CropBoxRegular, VolumeSamplerRndXYZ, VolumeSamplerRegularZ
@@ -157,27 +156,33 @@ class BaseDataset(ABC, Dataset):
 #         raise NotImplementedError
 
 
-def get_available_memory() -> int:
-    mem = psutil.virtual_memory()
-    return mem.available
+def unique_values_and_counts(arr):
+    """Returns unique values and their counts from an input list, along with the highest count"""
+    counter = Counter(arr)
+    return list(zip(*counter.items())), max(counter.values())
 
 
 class CachedDataset(Dataset):
     def __init__(self, dataset: xr.Dataset, group_size=32, group_pixels=False):
-
+        self.ds_grp = None
+        self.hash_mappings = None
         self.ds = dataset
+        self.group_by_pixel_index(group_pixels, group_size)
 
+    def group_by_pixel_index(self, group_pixels, group_size):
         if group_pixels:
-            index_set, counts = np.unique(self.ds.fxy_idx, return_counts=True)
-            mode_count = stats.mode(counts, keepdims=True)
-            index_set_reduced = index_set[counts == mode_count.mode[0]]
-            np.random.shuffle(index_set)
+            (index_set, counts), typical_count = unique_values_and_counts(self.ds.fxy_idx.values)
+            index_set, counts = np.array(index_set), np.array(counts)
+            index_set_reduced = index_set[counts == typical_count]
+
+            np.random.shuffle(index_set_reduced)
             self.hash_mappings = {i: v for i, v in enumerate(index_set_reduced)}
 
             self.ds_grp = self.ds.groupby('fxy_idx')
         else:
-            self.ds_grp = self.ds.groupby(self.ds.sample // group_size)
             self.hash_mappings = None
+
+            self.ds_grp = self.ds.groupby(self.ds.sample // group_size)
 
     def idx_mapping(self, index: int) -> int:
         if self.hash_mappings:

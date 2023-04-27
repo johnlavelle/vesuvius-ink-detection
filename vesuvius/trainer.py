@@ -61,7 +61,7 @@ class BaseTrainer(ABC):
         self.batch_size = None
         self.total = None
         self.loops = None
-        self.optimizer_scheduler = None
+        self.os = None
         self.optimizer = None
         self.scheduler = None
 
@@ -79,11 +79,11 @@ class BaseTrainer(ABC):
         pprint.pprint(self.config)
         print()
 
-        self.optimizer_scheduler = self.optimizer_scheduler_cls(self.model, self.learning_rate, self.total)
-        self.optimizer = self.optimizer_scheduler.optimizer()
-        self.scheduler = self.optimizer_scheduler.scheduler(self.optimizer)
+        self.os = self.optimizer_scheduler_cls(self.model, self.learning_rate, self.total)
+        self.optimizer = self.os.optimizer()
+        self.scheduler = self.os.scheduler()
         self.criterion = self.criterion
-        print(self.optimizer_scheduler, '\n')
+        print(self.os, '\n')
         print(self.criterion_validate, '\n')
 
     @abstractmethod

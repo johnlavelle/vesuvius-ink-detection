@@ -69,8 +69,8 @@ def cached_data_loader(cfg: Configuration1, reset_cache: bool = False, test_data
         total = cfg.training_steps // cfg.batch_size
         running_sample_len = 0
         datapoint: Datapoint
-        for i, datapoint in tqdm(enumerate(train_loader), total=total, disable=False,
-                                 desc='Caching data', position=1, leave=False):
+        for i, datapoint in tqdm(enumerate(train_loader),
+                                 total=total, disable=False, desc='Caching data', position=1, leave=False):
             if datapoint is None:
                 continue
 
