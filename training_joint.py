@@ -131,7 +131,7 @@ if __name__ == '__main__':
     except RuntimeError:
         print('Failed to get public tensorboard URL')
 
-    EPOCHS = 1
+    EPOCHS = 50
     VALIDATE_INTERVAL = 5000
     LOG_INTERVAL = 100
 

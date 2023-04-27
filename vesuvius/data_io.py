@@ -177,7 +177,7 @@ def get_dataset(zarr_path: str, fragment: Union[int, str], hold_back_box: Tuple[
     xl, yl, xu, yu = hold_back_box
     with dask.config.set(scheduler='synchronous'), xr.open_zarr(zarr_path, chunks={'sample': 15}) as ds:
         overhead_gb = (get_available_memory() - ds.nbytes) / (1024 * 1024 * 1024)
-        if overhead_gb > 2:
+        if overhead_gb > 5:
             print('Loading dataset into memory...', '\n')
             ds.load()
         if test_data:
