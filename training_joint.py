@@ -9,7 +9,6 @@ from torch.utils.data import DataLoader
 from src import tensorboard_access
 from vesuvius import ann
 from vesuvius.ann.optimisers import SGDOneCycleLR
-from vesuvius.ann import transforms
 from vesuvius.dataloader import get_train_loader_regular_z
 from vesuvius.sample_processors import SampleXYZ
 from vesuvius.sampler import CropBoxRegular
