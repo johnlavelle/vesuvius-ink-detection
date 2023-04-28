@@ -1,5 +1,5 @@
-import pprint
 import copy
+import pprint
 from itertools import repeat, chain, cycle, islice
 
 import dask
@@ -27,24 +27,24 @@ dask.config.set(scheduler='synchronous')
 
 
 class JointTrainer(BaseTrainer):
-    def __init__(self, *args, **kwargs) -> None:
+    def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
-
         self.model2 = None
-        self.os2 = None
+        self.criterion2 = None
+        self.output1 = None
+        self.output2 = None
         self.optimizer2 = None
         self.scheduler2 = None
-        self.criterion2 = None
-        self.train_loader_iter = None
-        self.test_loader_iter = None
-        self.labels = None
-        self.output2 = None
-        self.test_loader_len = None
         self.config_test = None
-        self.outputs_collected = []
-        self.labels_collected = []
-
-        self.get_train_test_loaders()
+        self.test_loader_len = None
+        self.inputs = None
+        self.output1 = None
+        self.output2 = None
+        self.os2 = None
+        self.loss2 = None
+        self.labels = None
+        self.outputs_collected = None
+        self.labels_collected = None
         self.setup_model2()
 
     def setup_model2(self) -> None:
@@ -54,6 +54,66 @@ class JointTrainer(BaseTrainer):
         self.scheduler2 = self.os2.scheduler()
         self.criterion2 = BCEWithLogitsLoss()
         print(self.os2, '\n')
+
+    def _apply_forward(self, datapoint) -> torch.Tensor:
+        voxels = datapoint.voxels
+        dim0, dim1 = voxels.shape[:2]
+        voxels = voxels.reshape(dim0 * dim1, *voxels.shape[2:])
+        scalar = (datapoint.z_start / (65 - self.config.box_width_z)).view(-1, 1).float()
+        return self.model(voxels.to(self.device), scalar.to(self.device))
+
+    def forward(self) -> 'JointTrainer':
+        self.model.train()
+        self.outputs_collected = []
+        self.labels_collected = []
+        for _ in range(5):
+            output = self._apply_forward(self.datapoint)
+            self.outputs_collected.append(output.reshape(self.datapoint.label.shape[:2]))
+            self.labels_collected.append(self.datapoint.label.float().mean(dim=1))
+        self.outputs = torch.cat(self.outputs_collected, dim=0)
+        self.labels = torch.cat(self.labels_collected, dim=0)
+        self.labels = self.labels.to(self.device)
+        return self
+
+    def forward2(self) -> 'JointTrainer':
+        self.model2.train()
+        self.output2 = self.model2(self.outputs)
+        return self
+
+    def loss(self) -> 'JointTrainer':
+        self.loss2 = self.criterion2(self.output2, self.labels)
+        self.trackers.update_train(self.loss2.item(), self.labels.shape[0])
+        return self
+
+    def backward(self) -> 'JointTrainer':
+        self.optimizer.zero_grad()
+        self.optimizer2.zero_grad()
+        self.loss2.backward()
+        return self
+
+    def step(self) -> 'JointTrainer':
+        self.optimizer.step()
+        self.scheduler.step()
+        self.optimizer2.step()
+        self.scheduler2.step()
+        return self
+
+    def validate(self) -> 'JointTrainer':
+        self.model.eval()
+        self.model2.eval()
+        iterations = 50
+        iterations = round(self.config.batch_size * (iterations / self.config.batch_size))
+        with torch.no_grad():
+            for datapoint_test in islice(self.test_loader_iter, iterations):
+                output = self._apply_forward(datapoint_test)
+                output = output.reshape(datapoint_test.label.shape[:2])
+                output2 = self.model2(output)
+                labels = datapoint_test.label.float().mean(dim=1)
+                labels = labels.to(self.device)
+                val_loss = self.criterion2(output2, labels)
+                self.trackers.update_test(val_loss.item(), len(labels))
+            self.trackers.update_lr(self.scheduler2.get_last_lr()[0], len(labels))
+        return self
 
     def get_train_test_loaders(self) -> None:
         self.batch_size = round(self.config.batch_size / ((65 - self.config.stride_z) / self.config.stride_z + 1))
@@ -76,61 +136,20 @@ class JointTrainer(BaseTrainer):
         self.test_loader_len = len(test_loader)
         self.test_loader_iter = cycle(iter(test_loader))
 
-    def _apply_forward(self, datapoint) -> torch.Tensor:
-        voxels = datapoint.voxels
-        dim0, dim1 = voxels.shape[:2]
-        voxels = voxels.reshape(dim0 * dim1, *voxels.shape[2:])
-        scalar = (datapoint.z_start / (65 - self.config.box_width_z)).view(-1, 1).float()
-        return self.model(voxels.to(self.device), scalar.to(self.device))
+    def __str__(self) -> str:
+        loop = self.trackers.incrementer.loop
+        lr = self.learning_rate
+        epochs = self.epochs
+        batch_size = self.batch_size
+        return f"Current Loop: {loop}, Learning Rate: {lr}, Epochs: {epochs}, Batch Size: {batch_size}"
 
-    def forward(self) -> 'JointTrainer':
-        self.model.train()
-        self.trackers.increment(self.datapoint.label.shape[0])
-
-        self.outputs_collected = []
-        self.labels_collected = []
-        for _ in range(5):
-            output = self._apply_forward(self.datapoint)
-            self.outputs_collected.append(output.reshape(self.datapoint.label.shape[:2]))
-            self.labels_collected.append(self.datapoint.label.float().mean(dim=1))
-        self.outputs = torch.cat(self.outputs_collected, dim=0)
-        self.labels = torch.cat(self.labels_collected, dim=0)
-        return self
-
-    def forward2(self) -> 'JointTrainer':
-        self.model2.train()
-        self.output2 = self.model2(self.outputs)
-        return self
-
-    def loss(self) -> 'JointTrainer':
-        self.labels = self.labels.to(self.device)
-        loss2 = self.criterion2(self.output2, self.labels)
-        self.trackers.update_train(loss2.item(), self.labels.shape[0])
-        self.optimizer.zero_grad()
-        self.optimizer2.zero_grad()
-        loss2.backward()
-        self.scheduler.step()
-        self.scheduler2.step()
-        self.optimizer.step()
-        self.optimizer2.step()
-        return self
-
-    def validate(self) -> 'JointTrainer':
-        self.model.eval()
-        self.model2.eval()
-        iterations = 50
-        iterations = round(self.config.batch_size * (iterations / self.config.batch_size))
-        with torch.no_grad():
-            for datapoint_test in islice(self.test_loader_iter, iterations):
-                output = self._apply_forward(datapoint_test)
-                output = output.reshape(datapoint_test.label.shape[:2])
-                output2 = self.model2(output)
-                labels = datapoint_test.label.float().mean(dim=1)
-                labels = labels.to(self.device)
-                val_loss = self.criterion2(output2, labels)
-                self.trackers.update_test(val_loss.item(), len(labels))
-            self.trackers.update_lr(self.scheduler2.get_last_lr()[0], len(labels))
-        return self
+    def __repr__(self) -> str:
+        classname = self.__class__.__name__
+        loop = self.trackers.incrementer.loop
+        lr = self.learning_rate
+        epochs = self.epochs
+        batch_size = self.batch_size
+        return f"{classname}(current_loop={loop}, learning_rate={lr}, epochs={epochs}, batch_size={batch_size})"
 
 
 # get_train_loader_regular_z = partial(get_train_loader_regular_z, force_cache_reset=False)
@@ -142,7 +161,7 @@ if __name__ == '__main__':
         print('Failed to get public tensorboard URL')
 
     EPOCHS = 1
-    VALIDATE_INTERVAL = 10
+    VALIDATE_INTERVAL = 100
     LOG_INTERVAL = 10
 
     xl, yl = 2048, 7168  # lower left corner of the test box
@@ -175,7 +194,7 @@ if __name__ == '__main__':
                                epochs=EPOCHS)
 
         for i, train in enumerate(trainer):
-            train.forward().forward2().loss()
+            train.forward().forward2().loss().backward().step()
 
             if i == 0:
                 continue
