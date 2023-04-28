@@ -106,7 +106,7 @@ class Trainer1(BaseTrainer):
         self.outputs = self._apply_forward(self.datapoint)
         return self
 
-    def loss(self) -> 'BaseTrainer':
+    def loss2(self) -> 'BaseTrainer':
         target = self.datapoint.label.float().to(self.device)
 
         base_loss = self.criterion(self.outputs, target)
@@ -167,7 +167,7 @@ if __name__ == '__main__':
                                 epochs=EPOCHS)
 
             for i, train in enumerate(trainer1):
-                train.forward().loss()
+                train.forward().loss2()
 
                 if i == 0:
                     continue
