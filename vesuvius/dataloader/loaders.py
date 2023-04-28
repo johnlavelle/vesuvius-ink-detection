@@ -100,7 +100,7 @@ def cached_data_loader(cfg: Configuration1, reset_cache: bool = False, test_data
         saver.config(cfg)
 
     ds = get_dataset(zarr_dir, fragment=cfg.test_box_fragment, hold_back_box=cfg.test_box, test_data=test_data)
-    return CachedDataset(ds, cfg.batch_size, group_pixels=cfg.group_pixels)
+    return CachedDataset(ds, transformers=cfg.transformers, group_size=cfg.batch_size, group_pixels=cfg.group_pixels)
 
 
 def get_train_loader(cfg: Configuration1,

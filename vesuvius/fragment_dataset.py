@@ -163,8 +163,9 @@ def unique_values_and_counts(arr):
 
 
 class CachedDataset(Dataset):
-    def __init__(self, dataset: xr.Dataset, group_size=32, group_pixels=False):
+    def __init__(self, dataset: xr.Dataset, transformers=None, group_size=32, group_pixels=False):
         self.ds_grp = None
+        self.transformers = transformers
         self.hash_mappings = None
         self.ds = dataset
         self.group_by_pixel_index(group_pixels, group_size)
@@ -196,15 +197,20 @@ class CachedDataset(Dataset):
         except KeyError:
             raise IndexError
 
-        return Datapoint(ds['voxels'],
-                         ds['label'],
-                         ds['fragment'],
-                         ds['x_start'],
-                         ds['x_stop'],
-                         ds['y_start'],
-                         ds['y_stop'],
-                         ds['z_start'],
-                         ds['z_stop']).to_namedtuple()
+        dp = Datapoint(ds['voxels'],
+                       ds['label'],
+                       ds['fragment'],
+                       ds['x_start'],
+                       ds['x_stop'],
+                       ds['y_start'],
+                       ds['y_stop'],
+                       ds['z_start'],
+                       ds['z_stop']).to_namedtuple()
+
+        if self.transformers:
+            dp = dp._replace(voxels=self.transformers(dp.voxels))
+
+        return dp
 
     def __len__(self):
         return len(self.hash_mappings)

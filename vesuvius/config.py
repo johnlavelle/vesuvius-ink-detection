@@ -3,6 +3,7 @@ import multiprocessing as mp
 import warnings
 
 from torch.nn import Module
+import torchvision.transforms as transforms
 from dataclasses import dataclass, field
 from typing import Union, Optional, Callable, List, Tuple, Any, Type
 try:
@@ -26,6 +27,7 @@ class Configuration1:
     fragments: Union[List[int], Tuple[int]]
     test_box: Tuple[int, int, int, int]
     test_box_fragment: int = 1
+    transformers: Optional[Union[List[Callable], Tuple[Callable]]] = None
     box_width_xy: int = 61
     box_width_z: int = 65
     stride_xy: int = None
@@ -83,6 +85,24 @@ class Configuration1:
         setattr(self, key, value)
 
 
+def serialize(obj: Any) -> Any:
+    if isinstance(obj, type):
+        return obj.__name__
+    elif isinstance(obj, transforms.Compose):
+        return "Compose([{}])".format(", ".join([serialize(transform) for transform in obj.transforms]))
+    elif callable(obj):
+        if hasattr(obj, '__name__'):
+            return obj.__name__
+        else:
+            return obj.__class__.__name__
+    elif isinstance(obj, (list, tuple)):
+        return [serialize(item) for item in obj]
+    elif hasattr(obj, "as_dict"):
+        return obj.as_dict()
+    else:
+        return obj
+
+
 @dataclass
 class Configuration2:
     info: str
@@ -90,19 +110,6 @@ class Configuration2:
     batch_size: int
     shuffle: bool = True
     num_workers: int = min(1, mp.cpu_count() - 1)
-
-
-def serialize(obj: Any) -> Any:
-    if isinstance(obj, type):
-        return obj.__name__
-    elif callable(obj):
-        return obj.__name__
-    elif isinstance(obj, (list, tuple)):
-        return [serialize(item) for item in obj]
-    elif hasattr(obj, "as_dict"):
-        return obj.as_dict()
-    else:
-        return obj
 
 
 def get_train2_config(config) -> Configuration1:

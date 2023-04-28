@@ -1,4 +1,5 @@
 import pprint
+import copy
 from itertools import repeat, chain, cycle, islice
 
 import dask
@@ -39,6 +40,7 @@ class JointTrainer(BaseTrainer):
         self.labels = None
         self.output2 = None
         self.test_loader_len = None
+        self.config_test = None
         self.outputs_collected = []
         self.labels_collected = []
 
@@ -58,14 +60,18 @@ class JointTrainer(BaseTrainer):
 
         dataloader_train = DataLoader(self.train_loader(self.config, False, test_data=False),
                                       batch_size=self.batch_size,
-                                      num_workers=self.config.num_workers)
+                                      num_workers=self.config.num_workers,
+                                      drop_last=True)
         self.total = self.epochs * len(dataloader_train) * self.batch_size
         self.loops = self.epochs * len(dataloader_train)
         self.train_loader_iter = chain.from_iterable(repeat(dataloader_train, self.epochs))
 
-        test_loader = DataLoader(self.train_loader(self.config, False, test_data=True),
+        self.config_test = copy.copy(self.config)
+        self.config_test.transformers = None
+        test_loader = DataLoader(self.train_loader(self.config_test, False, test_data=True),
                                  batch_size=self.batch_size,
-                                 num_workers=self.config.num_workers)
+                                 num_workers=self.config.num_workers,
+                                 drop_last=True)
 
         self.test_loader_len = len(test_loader)
         self.test_loader_iter = cycle(iter(test_loader))
@@ -110,8 +116,10 @@ class JointTrainer(BaseTrainer):
     def validate(self) -> 'BaseTrainer':
         self.model.eval()
         self.model2.eval()
+        iterations = 50
+        iterations = round(self.config.batch_size * (iterations / self.config.batch_size))
         with torch.no_grad():
-            for datapoint_test in islice(self.test_loader_iter, 200):
+            for datapoint_test in islice(self.test_loader_iter, iterations):
                 output = self._apply_forward(datapoint_test)
                 output = output.reshape(self.datapoint.label.shape[:2])
                 output2 = self.model2(output)
@@ -131,7 +139,7 @@ if __name__ == '__main__':
     except RuntimeError:
         print('Failed to get public tensorboard URL')
 
-    EPOCHS = 50
+    EPOCHS = 1
     VALIDATE_INTERVAL = 5000
     LOG_INTERVAL = 100
 
@@ -144,10 +152,11 @@ if __name__ == '__main__':
                          suffix_cache='regular',
                          test_box=(xl, yl, xl + width, yl + height),  # Hold back rectangle
                          test_box_fragment=2,  # Hold back fragment
+                         transformers=ann.transforms.transform1,
                          shuffle=False,
                          group_pixels=True,
                          balance_ink=True,
-                         stride_xy=61,
+                         stride_xy=91,
                          stride_z=6,
                          num_workers=0)
 
@@ -165,11 +174,12 @@ if __name__ == '__main__':
 
         for i, train in enumerate(trainer):
             train.forward().forward2().loss()
-            if i == 0:
-                continue
-            if i % LOG_INTERVAL == 0:
-                train.trackers.log_train()
-            if i % VALIDATE_INTERVAL == 0:
-                train.validate()
-                train.trackers.log_test()
+
+            # if i == 0:
+            #     continue
+            # if i % LOG_INTERVAL == 0:
+            #     train.trackers.log_train()
+            # if i % VALIDATE_INTERVAL == 0:
+            #     train.validate()
+            #     train.trackers.log_test()
         train.save_model_output()

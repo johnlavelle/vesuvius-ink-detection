@@ -2,6 +2,10 @@ import gc
 import glob
 import json
 import os
+import time
+import tempfile
+
+import shutil
 import warnings
 from dataclasses import asdict
 from functools import lru_cache
@@ -172,22 +176,83 @@ def get_available_memory() -> int:
     return mem.available
 
 
-@lru_cache(maxsize=1)
-def get_dataset(zarr_path: str, fragment: Union[int, str], hold_back_box: Tuple[int, int, int, int], test_data=False):
+def get_hold_back_bools(ds: xr.Dataset, fragment, hold_back_box: Tuple[int, int, int, int]) -> xr.DataArray:
     xl, yl, xu, yu = hold_back_box
-    with dask.config.set(scheduler='synchronous'), xr.open_zarr(zarr_path, chunks={'sample': 15}) as ds:
+    hold_back_bool = ((ds.fragment == fragment) &
+                      (ds.x_start >= xl) &
+                      (ds.x_stop <= xu) &
+                      (ds.y_start >= yl) &
+                      (ds.y_stop <= yu)).compute()
+    return hold_back_bool
+
+
+def rechunk(ds: xr.Dataset) -> xr.Dataset:
+    # Set the desired chunk size for each variable and coordinate along the sample dimension
+    variables = list(ds.coords)
+    variables.append('label')
+    desired_chunk_sizes = {key: {'sample': len(ds.sample)} for key in variables}
+    desired_chunk_sizes['voxels'] = {'sample': 16}
+    del desired_chunk_sizes['sample']
+
+    # Check if the dataset already has the desired chunk sizes
+    needs_rechunking = False
+    for var, chunks in desired_chunk_sizes.items():
+        if ds[var].chunks[0][0] != chunks['sample']:
+            needs_rechunking = True
+            break
+
+    zarr_path = ds.encoding["source"]
+
+    # Rechunk and save the dataset, replacing the existing Zarr file if needed
+    if needs_rechunking:
+        print('Rechunking dataset ...')
+        print('... original chunk sizes:', ds.chunks)
+        print('... desired chunk sizes:', desired_chunk_sizes)
+
+        for var, chunks in desired_chunk_sizes.items():
+            if var in ds:
+                ds[var] = ds[var].chunk(chunks)
+
+        # Remove the 'chunks' encoding from the variables
+        for var in ds:
+            del ds[var].encoding['chunks']
+        for var in ds.coords:
+            del ds[var].encoding['chunks']
+
+        # Save the rechunked dataset to a temporary Zarr file
+        with tempfile.TemporaryDirectory() as temp_dir:
+            temp_zarr_path = os.path.join(temp_dir, "temp.zarr")
+            ds.to_zarr(temp_zarr_path, mode='w', consolidated=True)
+
+            # Remove the original Zarr file and replace it with the temporary Zarr file
+            shutil.rmtree(zarr_path)
+            shutil.move(temp_zarr_path, zarr_path)
+        print('... finished rechunking', '\n')
+
+    return xr.open_zarr(zarr_path, consolidated=True)
+
+
+@lru_cache(maxsize=1)
+def open_dataset(zarr_path: str):
+    with dask.config.set(scheduler='synchronous'):
+        ds = xr.open_zarr(zarr_path, consolidated=True)
+        ds = rechunk(ds)
         overhead_gb = (get_available_memory() - ds.nbytes) / (1024 * 1024 * 1024)
-        if overhead_gb > 5:
+        if overhead_gb > 4:
             print('Loading dataset into memory...', '\n')
             ds.load()
-        if test_data:
-            hold_back_bool = ((ds.fragment == fragment) &
-                              (ds.x_start >= xl) &
-                              (ds.x_stop <= xu) &
-                              (ds.y_start >= yl) &
-                              (ds.y_stop <= yu)).compute()
-            ds = ds.isel(sample=hold_back_bool)
+            print('... finished loading dataset into memory', '\n')
+        else:
+            print('Loading coordinates into memory...', '\n')
+            ds[ds.coords.keys()].load()
+            print('... finished loading coordinates into memory', '\n')
         return ds
 
 
-
+def get_dataset(zarr_path: str, fragment: Union[int, str], hold_back_box: Tuple[int, int, int, int], test_data=False):
+    with dask.config.set(scheduler='synchronous'):
+        ds = open_dataset(zarr_path)
+        if test_data:
+            hold_back_bools = get_hold_back_bools(ds, fragment, hold_back_box)
+            ds = ds.isel(sample=hold_back_bools)
+        return ds
