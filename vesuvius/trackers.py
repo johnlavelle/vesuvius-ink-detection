@@ -103,8 +103,8 @@ class Track:
     def update_test(self, loss, batch_size=1):
         self.logger_test_loss.update(loss, batch_size)
 
-    def update_lr(self, lr):
-        self.logger_lr.update(lr, 1)
+    def update_lr(self, lr, batch_size=1):
+        self.logger_lr.update(lr, batch_size)
 
     def log_test(self):
         self.logger_test_loss.log(self.incrementer.count)

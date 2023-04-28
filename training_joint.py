@@ -44,8 +44,8 @@ class JointTrainer(BaseTrainer):
         self.outputs_collected = []
         self.labels_collected = []
 
-        self.setup_model2()
         self.get_train_test_loaders()
+        self.setup_model2()
 
     def setup_model2(self) -> None:
         self.model2 = ann.models.BinaryClassifier().to(self.device)
@@ -83,9 +83,9 @@ class JointTrainer(BaseTrainer):
         scalar = (datapoint.z_start / (65 - self.config.box_width_z)).view(-1, 1).float()
         return self.model(voxels.to(self.device), scalar.to(self.device))
 
-    def forward(self) -> 'BaseTrainer':
+    def forward(self) -> 'JointTrainer':
         self.model.train()
-        self.trackers.increment(train.datapoint.label.shape[0])
+        self.trackers.increment(self.datapoint.label.shape[0])
 
         self.outputs_collected = []
         self.labels_collected = []
@@ -93,27 +93,29 @@ class JointTrainer(BaseTrainer):
             output = self._apply_forward(self.datapoint)
             self.outputs_collected.append(output.reshape(self.datapoint.label.shape[:2]))
             self.labels_collected.append(self.datapoint.label.float().mean(dim=1))
-        self.outputs = torch.cat(train.outputs_collected, dim=0)
-        self.labels = torch.cat(train.labels_collected, dim=0)
+        self.outputs = torch.cat(self.outputs_collected, dim=0)
+        self.labels = torch.cat(self.labels_collected, dim=0)
         return self
 
-    def forward2(self) -> 'BaseTrainer':
+    def forward2(self) -> 'JointTrainer':
         self.model2.train()
         self.output2 = self.model2(self.outputs)
         return self
 
-    def loss(self) -> 'BaseTrainer':
+    def loss(self) -> 'JointTrainer':
         self.labels = self.labels.to(self.device)
         loss2 = self.criterion2(self.output2, self.labels)
         self.trackers.update_train(loss2.item(), self.labels.shape[0])
         self.optimizer.zero_grad()
         self.optimizer2.zero_grad()
         loss2.backward()
+        self.scheduler.step()
+        self.scheduler2.step()
         self.optimizer.step()
         self.optimizer2.step()
         return self
 
-    def validate(self) -> 'BaseTrainer':
+    def validate(self) -> 'JointTrainer':
         self.model.eval()
         self.model2.eval()
         iterations = 50
@@ -121,13 +123,13 @@ class JointTrainer(BaseTrainer):
         with torch.no_grad():
             for datapoint_test in islice(self.test_loader_iter, iterations):
                 output = self._apply_forward(datapoint_test)
-                output = output.reshape(self.datapoint.label.shape[:2])
+                output = output.reshape(datapoint_test.label.shape[:2])
                 output2 = self.model2(output)
                 labels = datapoint_test.label.float().mean(dim=1)
                 labels = labels.to(self.device)
                 val_loss = self.criterion2(output2, labels)
                 self.trackers.update_test(val_loss.item(), len(labels))
-        self.trackers.update_lr(self.optimizer.param_groups[0]['lr'])
+            self.trackers.update_lr(self.scheduler2.get_last_lr()[0], len(labels))
         return self
 
 
@@ -140,8 +142,8 @@ if __name__ == '__main__':
         print('Failed to get public tensorboard URL')
 
     EPOCHS = 1
-    VALIDATE_INTERVAL = 5000
-    LOG_INTERVAL = 100
+    VALIDATE_INTERVAL = 10
+    LOG_INTERVAL = 10
 
     xl, yl = 2048, 7168  # lower left corner of the test box
     width, height = 2045, 2048
@@ -175,11 +177,11 @@ if __name__ == '__main__':
         for i, train in enumerate(trainer):
             train.forward().forward2().loss()
 
-            # if i == 0:
-            #     continue
-            # if i % LOG_INTERVAL == 0:
-            #     train.trackers.log_train()
-            # if i % VALIDATE_INTERVAL == 0:
-            #     train.validate()
-            #     train.trackers.log_test()
+            if i == 0:
+                continue
+            if i % LOG_INTERVAL == 0:
+                train.trackers.log_train()
+            if i % VALIDATE_INTERVAL == 0:
+                train.validate()
+                train.trackers.log_test()
         train.save_model_output()
