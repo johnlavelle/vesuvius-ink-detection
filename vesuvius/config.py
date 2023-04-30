@@ -5,7 +5,7 @@ import warnings
 from torch.nn import Module
 import torchvision.transforms as transforms
 from dataclasses import dataclass, field
-from typing import Union, Optional, Callable, List, Tuple, Any, Type
+from typing import Union, Optional, Callable, List, Tuple, Any, Type, Dict
 try:
     from typing import Protocol
 except ImportError:
@@ -13,35 +13,57 @@ except ImportError:
 
 from vesuvius.sampler import BaseCropBox, CropBoxRegular
 from vesuvius.fragment_dataset import BaseDataset
+from vesuvius.ann import optimisers
+from vesuvius.ann.models import HybridModel
 
 
 @dataclass
-class Configuration1:
-    info: str
-    model: Type[Module]
-    volume_dataset_cls: Type[BaseDataset]
-    crop_box_cls: Type[BaseCropBox]
-    label_fn: Callable
-    training_steps: int
-    batch_size: int
-    fragments: Union[List[int], Tuple[int]]
-    test_box: Tuple[int, int, int, int]
-    test_box_fragment: int = 1
-    transformers: Optional[Union[List[Callable], Tuple[Callable]]] = None
-    box_width_xy: int = 61
-    box_width_z: int = 65
-    stride_xy: int = None
-    stride_z: int = None
+class ConfigurationModel:
+    model: Module = HybridModel()
+    learning_rate: float = 0.03
+    l1_lambda: float = 0
+    total_steps: int = 10_000
+    epochs: int = 1
+    criterion: Module = None
+    optimizer_scheduler_cls: Type[optimisers.OptimiserScheduler] = optimisers.SGDOneCycleLR
+    optimizer_scheduler: optimisers.OptimiserScheduler = field(init=False)
+
+    def __post_init__(self):
+        self.optimizer_scheduler = self.optimizer_scheduler_cls(self.model, self.learning_rate, self.total_steps)
+
+
+xl, yl = 2048, 7168  # lower left corner of the test box
+width, height = 2045, 2048
+
+
+@dataclass
+class Configuration:
+    info: str = ""
+    volume_dataset_cls: Optional[Type[BaseDataset]] = None
+    crop_box_cls: Optional[Type[BaseCropBox]] = None
+    label_fn: Callable[..., Any] = None
+    transformers: Optional[Callable[..., Any]] = None
+    batch_size: int = 32
+    fragments: Union[List[int], Tuple[int, ...]] = (1, 2, 3)
+    test_box: Tuple[int, int, int, int] = (xl, yl, xl + width, yl + height)  # Hold back rectangle
+    test_box_fragment: int = 2
+    box_width_xy: int = 91
+    box_width_z: int = 6
+    stride_xy: Optional[int] = 91
+    stride_z: Optional[int] = 6
     balance_ink: bool = True
     shuffle: bool = True
     group_pixels: bool = False
-    num_workers: int = min(1, mp.cpu_count() - 1)
-    prefix: str = field(default_factory=lambda: "")
-    suffix_cache: str = field(default_factory=lambda: "")
-    collate_fn: Optional[Union[Callable, None]] = None
-    nn_dict: Optional[Union[dict, None]] = None
-    performance_dict: Optional[Union[dict, None]] = None
-    extra_dict: Optional[Union[dict, None]] = None
+    validation_steps: int = 100
+    num_workers: int = max(1, mp.cpu_count() - 1)
+    prefix: str = "/data/kaggle/input/vesuvius-challenge-ink-detection/train/"
+    suffix_cache: str = "sobol"
+    collate_fn: Optional[Callable[..., Any]] = None
+    nn_dict: Optional[Dict[str, Any]] = None
+    model0: Optional[ConfigurationModel] = None
+    model1: Optional[ConfigurationModel] = None
+    performance_dict: Optional[Dict[str, Any]] = None
+    extra_dict: Optional[Dict[str, Any]] = None
 
     def update_nn_kwargs(self, optimizer_: Any, scheduler_: Any, criterion_: Any, learning_rate: float, epochs: int):
         reprs = {'optimizer': str(optimizer_.__repr__),
@@ -101,35 +123,3 @@ def serialize(obj: Any) -> Any:
         return obj.as_dict()
     else:
         return obj
-
-
-@dataclass
-class Configuration2:
-    info: str
-    model: Type[Module]
-    batch_size: int
-    shuffle: bool = True
-    num_workers: int = min(1, mp.cpu_count() - 1)
-
-
-def get_train2_config(config) -> Configuration1:
-    cfg = copy.copy(config)
-    cfg.suffix_cache = 'regular'
-    cfg.crop_box_cls = CropBoxRegular
-    # Keep shuffle = False, so the dataloader does not shuffle, to ensure you get all the z bins for each (x, y).
-    # The data will already be shuffled w.r.t. (x, y), per fragment. The cached dataset will be completely shuffled.
-    cfg.shuffle = False
-    cfg.group_pixels = True
-    cfg.balance_ink = True
-    cfg.sampling = 5  # TODO: delete this?
-    cfg.stride_xy = 61
-    cfg.stride_z = 6
-    return cfg
-
-
-class ConfigProtocol(Protocol):
-    training_steps: int
-    model: Any
-    volume_dataset_cls: Any
-    crop_box_cls: Any
-    label_fn: Any

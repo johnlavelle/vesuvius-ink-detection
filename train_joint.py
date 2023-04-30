@@ -4,18 +4,21 @@ from itertools import repeat, chain, cycle, islice
 
 import dask
 import torch
-from torch.nn import BCEWithLogitsLoss
+from torch import nn
 from torch.utils.data import DataLoader
+from torch.nn import BCEWithLogitsLoss
 
 from src import tensorboard_access
 from vesuvius import ann
-from vesuvius.ann.optimisers import SGDOneCycleLR
+from vesuvius.config import Configuration
+from vesuvius.config import ConfigurationModel
 from vesuvius.dataloader import get_train_loader_regular_z
 from vesuvius.sample_processors import SampleXYZ
 from vesuvius.sampler import CropBoxRegular
 from vesuvius.trackers import Track
-from vesuvius.trainer import BaseTrainer
+from vesuvius.trainer import BaseTrainer, centre_pixel
 from vesuvius.utils import timer
+from vesuvius.ann import models
 
 # If READ_EXISTING_CONFIG is False, config is specified in Configuration (below)
 # else config is read from CONFIG_PATH.
@@ -29,41 +32,35 @@ dask.config.set(scheduler='synchronous')
 class JointTrainer(BaseTrainer):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
-        self.model2 = None
-        self.criterion2 = None
+        self.output0 = None
         self.output1 = None
-        self.output2 = None
-        self.optimizer2 = None
-        self.scheduler2 = None
         self.config_test = None
         self.test_loader_len = None
         self.inputs = None
-        self.output1 = None
-        self.output2 = None
-        self.os2 = None
-        self.loss2 = None
+        self._loss = None
+        self._loss_joint = None
         self.labels = None
         self.outputs_collected = None
         self.labels_collected = None
-        self.setup_model2()
+        self.model1, self.optimizer1, self.scheduler1, self.criterion1 = self.setup_model(self.config.model1)
 
-    def setup_model2(self) -> None:
-        self.model2 = ann.models.BinaryClassifier().to(self.device)
-        self.os2 = self.optimizer_scheduler_cls(self.model2, self.learning_rate, self.total)
-        self.optimizer2 = self.os2.optimizer()
-        self.scheduler2 = self.os2.scheduler()
-        self.criterion2 = BCEWithLogitsLoss()
-        print(self.os2, '\n')
+    def setup_model(self, model_object):
+        args = super().setup_model(model_object)
+        if torch.cuda.device_count() >= 2:
+            self.model0 = nn.DataParallel(self.model0)
+            self.model1 = nn.DataParallel(self.model1)
+            print('Using DataParallel for training.')
+        return args
 
     def _apply_forward(self, datapoint) -> torch.Tensor:
         voxels = datapoint.voxels
         dim0, dim1 = voxels.shape[:2]
         voxels = voxels.reshape(dim0 * dim1, *voxels.shape[2:])
         scalar = (datapoint.z_start / (65 - self.config.box_width_z)).view(-1, 1).float()
-        return self.model(voxels.to(self.device), scalar.to(self.device))
+        return self.model0(voxels.to(self.device), scalar.to(self.device))
 
     def forward(self) -> 'JointTrainer':
-        self.model.train()
+        self.model0.train()
         self.outputs_collected = []
         self.labels_collected = []
         for _ in range(5):
@@ -76,43 +73,47 @@ class JointTrainer(BaseTrainer):
         return self
 
     def forward2(self) -> 'JointTrainer':
-        self.model2.train()
-        self.output2 = self.model2(self.outputs)
+        self.model1.train()
+        self.output1 = self.model1(self.outputs)
         return self
 
     def loss(self) -> 'JointTrainer':
-        self.loss2 = self.criterion2(self.output2, self.labels)
-        self.trackers.update_train(self.loss2.item(), self.labels.shape[0])
+        base_loss = self.criterion1(self.output1, self.labels)
+        l1_regularization = torch.norm(self.model0.fc_scalar.weight, p=1)
+        self._loss_joint = base_loss + (self.config.model1.l1_lambda * l1_regularization)
+        self.trackers.update_train(self._loss_joint.item(), self.labels.shape[0])
         return self
 
     def backward(self) -> 'JointTrainer':
-        self.optimizer.zero_grad()
-        self.optimizer2.zero_grad()
-        self.loss2.backward()
+        self.optimizer0.zero_grad()
+        self.optimizer1.zero_grad()
+        self._loss_joint.backward()
         return self
 
     def step(self) -> 'JointTrainer':
-        self.optimizer.step()
-        self.scheduler.step()
-        self.optimizer2.step()
-        self.scheduler2.step()
+        self.optimizer0.step()
+        self.scheduler0.step()
+        self.optimizer1.step()
+        self.scheduler1.step()
         return self
 
     def validate(self) -> 'JointTrainer':
-        self.model.eval()
-        self.model2.eval()
-        iterations = 50
+        self.model0.eval()
+        self.model1.eval()
+        iterations = self.config.validation_steps
         iterations = round(self.config.batch_size * (iterations / self.config.batch_size))
         with torch.no_grad():
             for datapoint_test in islice(self.test_loader_iter, iterations):
-                output = self._apply_forward(datapoint_test)
-                output = output.reshape(datapoint_test.label.shape[:2])
-                output2 = self.model2(output)
+                output0 = self._apply_forward(datapoint_test)
+                output0 = output0.reshape(datapoint_test.label.shape[:2])
+                output1 = self.model1(output0)
                 labels = datapoint_test.label.float().mean(dim=1)
                 labels = labels.to(self.device)
-                val_loss = self.criterion2(output2, labels)
+                val_loss = self.criterion1(output1, labels)
                 self.trackers.update_test(val_loss.item(), len(labels))
-            self.trackers.update_lr(self.scheduler2.get_last_lr()[0], len(labels))
+            self.trackers.update_lr(self.scheduler1.get_last_lr()[0])
+        self.model0.train()
+        self.model1.train()
         return self
 
     def get_train_test_loaders(self) -> None:
@@ -138,7 +139,7 @@ class JointTrainer(BaseTrainer):
 
     def __str__(self) -> str:
         loop = self.trackers.incrementer.loop
-        lr = self.learning_rate
+        lr = self.config.model1.learning_rate
         epochs = self.epochs
         batch_size = self.batch_size
         return f"Current Loop: {loop}, Learning Rate: {lr}, Epochs: {epochs}, Batch Size: {batch_size}"
@@ -146,7 +147,7 @@ class JointTrainer(BaseTrainer):
     def __repr__(self) -> str:
         classname = self.__class__.__name__
         loop = self.trackers.incrementer.loop
-        lr = self.learning_rate
+        lr = self.config.model1.learning_rate
         epochs = self.epochs
         batch_size = self.batch_size
         return f"{classname}(current_loop={loop}, learning_rate={lr}, epochs={epochs}, batch_size={batch_size})"
@@ -160,38 +161,46 @@ if __name__ == '__main__':
     except RuntimeError:
         print('Failed to get public tensorboard URL')
 
-    EPOCHS = 1
-    VALIDATE_INTERVAL = 100
-    LOG_INTERVAL = 10
+    EPOCHS = 30
+    TOTAL_STEPS = 10_000_000
+    VALIDATE_INTERVAL = 500
+    LOG_INTERVAL = 50
 
-    xl, yl = 2048, 7168  # lower left corner of the test box
-    width, height = 2045, 2048
-    config_kwargs = dict(training_steps=10_000_000,
-                         model=ann.models.HybridModel,
-                         volume_dataset_cls=SampleXYZ,
-                         crop_box_cls=CropBoxRegular,
-                         suffix_cache='regular',
-                         test_box=(xl, yl, xl + width, yl + height),  # Hold back rectangle
-                         test_box_fragment=2,  # Hold back fragment
-                         transformers=ann.transforms.transform1,
-                         shuffle=False,
-                         group_pixels=True,
-                         balance_ink=True,
-                         stride_xy=91,
-                         stride_z=6,
-                         num_workers=0)
+    config_model0 = ConfigurationModel(
+        model=models.HybridModel(),
+        learning_rate=0.03,
+        total_steps=TOTAL_STEPS,
+        epochs=EPOCHS)
+
+    config_model1 = ConfigurationModel(
+        model=models.SimpleBinaryClassifier(),
+        learning_rate=config_model0.learning_rate,
+        total_steps=config_model0.total_steps,
+        epochs=config_model0.epochs,
+        criterion=BCEWithLogitsLoss())
+
+    config = Configuration(
+        volume_dataset_cls=SampleXYZ,
+        crop_box_cls=CropBoxRegular,
+        suffix_cache='regular',
+        label_fn=centre_pixel,
+        transformers=ann.transforms.transform1,
+        shuffle=False,
+        group_pixels=True,
+        balance_ink=True,
+        batch_size=32,
+        stride_xy=91,
+        stride_z=6,
+        num_workers=0,
+        model0=config_model0,
+        model1=config_model1)
 
     with Track() as track, timer("Training"):
 
         trainer = JointTrainer(get_train_loader_regular_z,
                                get_train_loader_regular_z,
                                track,
-                               SGDOneCycleLR,
-                               BCEWithLogitsLoss,
-                               config_kwargs=config_kwargs,
-                               learning_rate=0.03,
-                               l1_lambda=0,
-                               epochs=EPOCHS)
+                               config=config)
 
         for i, train in enumerate(trainer):
             train.forward().forward2().loss().backward().step()

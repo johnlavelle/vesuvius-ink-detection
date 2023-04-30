@@ -13,7 +13,7 @@ from torch.utils.data import DataLoader, ConcatDataset, Dataset
 from torch.utils.data._utils.collate import default_collate
 from tqdm import tqdm
 
-from vesuvius.config import Configuration1
+from vesuvius.config import Configuration
 from vesuvius.data_io import dataset_to_zarr, get_dataset
 from vesuvius.data_io import read_dataset_from_zarr, SaveModel
 from vesuvius.datapoints import Datapoint
@@ -39,7 +39,7 @@ worker_init_fns = {
 }
 
 
-def standard_data_loader(cfg: Configuration1, worker_init='diff') -> DataLoader:
+def standard_data_loader(cfg: Configuration, worker_init='diff') -> DataLoader:
     xarray_dataset_iter = fragment_datasets.XarrayDatasetIter(cfg)
     datasets = fragment_datasets.TorchDatasetIter(cfg, xarray_dataset_iter)
     datasets = ConcatDataset(datasets)
@@ -51,7 +51,7 @@ def standard_data_loader(cfg: Configuration1, worker_init='diff') -> DataLoader:
                       collate_fn=cfg.collate_fn)
 
 
-def cached_data_loader(cfg: Configuration1, reset_cache: bool = False, test_data=False, worker_init='diff') -> Dataset:
+def cached_data_loader(cfg: Configuration, reset_cache: bool = False, test_data=False, worker_init='diff') -> Dataset:
     cache_dir = os.path.join(cfg.prefix, f'data_cache_{cfg.suffix_cache}')
     zarr_dir = os.path.join(cache_dir, f'cache.zarr')
 
@@ -103,7 +103,7 @@ def cached_data_loader(cfg: Configuration1, reset_cache: bool = False, test_data
     return CachedDataset(ds, transformers=cfg.transformers, group_size=cfg.batch_size, group_pixels=cfg.group_pixels)
 
 
-def get_train_loader(cfg: Configuration1,
+def get_train_loader(cfg: Configuration,
                      cached=False,
                      reset_cache=False,
                      worker_init='diff',
@@ -127,7 +127,7 @@ def get_test_dataset(test_box_fragment, num_workers, prefix, x_start, x_stop, y_
     return ds_test
 
 
-def test_loader(cfg: Configuration1) -> DataLoader:
+def test_loader(cfg: Configuration) -> DataLoader:
     """Hold back data test box for fragment 1"""
     ds_test = get_test_dataset(cfg.test_box_fragment, cfg.num_workers, cfg.prefix,
                                cfg.test_box[0], cfg.test_box[2], cfg.test_box[1], cfg.test_box[3])

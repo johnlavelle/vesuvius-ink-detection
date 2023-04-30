@@ -4,6 +4,9 @@ import json
 import os
 import time
 import tempfile
+from pathlib import Path
+import itertools
+
 
 import shutil
 import warnings
@@ -30,7 +33,7 @@ from tqdm import tqdm
 from zarr.sync import ProcessSynchronizer
 
 from vesuvius.utils import normalise_images
-from vesuvius.config import Configuration1, serialize
+from vesuvius.config import Configuration, serialize
 
 
 def read_tiffs(fragment: int, prefix: str) -> xr.Dataset:
@@ -111,6 +114,26 @@ def save_zarr(fragment: int, prefix: str, normalize=True) -> str:
     return zarr_path
 
 
+def rechunk(ds: xr.Dataset, zarr_path):
+    print('Rechunking dataset ...')
+    zarr_path = Path(zarr_path)
+    with tempfile.TemporaryDirectory(dir=zarr_path.parent) as temp_dir:
+        temp_zarr_path = os.path.join(temp_dir, "temp.zarr")
+        ds.to_zarr(temp_zarr_path, mode='w', consolidated=True)
+
+        # Remove the original Zarr file and replace it with the temporary Zarr file
+        shutil.rmtree(zarr_path)
+        shutil.move(temp_zarr_path, zarr_path)
+    print('... finished rechunking', '\n')
+
+
+def rechunk_org(ds, zarr_path):
+    preferred_chunks = tuple(ds['images'].encoding['preferred_chunks'].values())
+    chunks = ds['images'].encoding['chunks']
+    if preferred_chunks != chunks:
+        rechunk(ds, zarr_path)
+
+
 def read_dataset_from_zarr(fragment: Union[int, str], workers: int, prefix: str, normalize: bool = True) -> xr.Dataset:
     zarr_path = join(prefix, str(fragment), 'surface_volume.zarr')
     if not os.path.exists(zarr_path):
@@ -144,7 +167,7 @@ class SaveModel:
         torch.save(torch_model.state_dict(), self.model_path)
         return self.model_path
 
-    def config(self, config: Configuration1) -> str:
+    def config(self, config: Configuration) -> str:
         config_dict = asdict(config, dict_factory=lambda obj: {k: serialize(v) for k, v in obj})
         with open(self.conf_path, "w") as json_file:
             json.dump(config_dict, json_file, indent=4)
@@ -158,16 +181,16 @@ class LoadModel:
         self._config = self._load_config()
 
     def model(self) -> nn.Module:
-        _model = self._config.model()
+        _model = self._config.mode0()
         _model.load_state_dict(torch.load(self.model_path))
-        return self._config.model()
+        return self._config.mode0()
 
-    def _load_config(self) -> Configuration1:
+    def _load_config(self) -> Configuration:
         with open(self.config_path, "r") as json_file:
             config_dict = json.load(json_file)
-        return Configuration1(**config_dict)
+        return Configuration(**config_dict)
 
-    def config(self) -> Configuration1:
+    def config(self) -> Configuration:
         return self._config
 
 
@@ -186,7 +209,7 @@ def get_hold_back_bools(ds: xr.Dataset, fragment, hold_back_box: Tuple[int, int,
     return hold_back_bool
 
 
-def rechunk(ds: xr.Dataset) -> xr.Dataset:
+def rechunk_cached(ds: xr.Dataset) -> xr.Dataset:
     # Set the desired chunk size for each variable and coordinate along the sample dimension
     variables = list(ds.coords)
     variables.append('label')
@@ -205,29 +228,17 @@ def rechunk(ds: xr.Dataset) -> xr.Dataset:
 
     # Rechunk and save the dataset, replacing the existing Zarr file if needed
     if needs_rechunking:
-        print('Rechunking dataset ...')
-        print('... original chunk sizes:', ds.chunks)
-        print('... desired chunk sizes:', desired_chunk_sizes)
-
         for var, chunks in desired_chunk_sizes.items():
             if var in ds:
                 ds[var] = ds[var].chunk(chunks)
 
         # Remove the 'chunks' encoding from the variables
-        for var in ds:
+        for var in itertools.chain(ds.data_vars, ds.coords):
             del ds[var].encoding['chunks']
-        for var in ds.coords:
-            del ds[var].encoding['chunks']
+            del ds[var].encoding['preferred_chunks']
 
         # Save the rechunked dataset to a temporary Zarr file
-        with tempfile.TemporaryDirectory() as temp_dir:
-            temp_zarr_path = os.path.join(temp_dir, "temp.zarr")
-            ds.to_zarr(temp_zarr_path, mode='w', consolidated=True)
-
-            # Remove the original Zarr file and replace it with the temporary Zarr file
-            shutil.rmtree(zarr_path)
-            shutil.move(temp_zarr_path, zarr_path)
-        print('... finished rechunking', '\n')
+        rechunk(ds, zarr_path)
 
     return xr.open_zarr(zarr_path, consolidated=True)
 
@@ -236,16 +247,14 @@ def rechunk(ds: xr.Dataset) -> xr.Dataset:
 def open_dataset(zarr_path: str):
     with dask.config.set(scheduler='synchronous'):
         ds = xr.open_zarr(zarr_path, consolidated=True)
-        ds = rechunk(ds)
+        ds = rechunk_cached(ds)
         overhead_gb = (get_available_memory() - ds.nbytes) / (1024 * 1024 * 1024)
         if overhead_gb > 4:
             print('Loading dataset into memory...', '\n')
             ds.load()
-            print('... finished loading dataset into memory', '\n')
         else:
             print('Loading coordinates into memory...', '\n')
             ds[ds.coords.keys()].load()
-            print('... finished loading coordinates into memory', '\n')
         return ds
 
 

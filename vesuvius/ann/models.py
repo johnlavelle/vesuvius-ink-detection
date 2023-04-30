@@ -138,3 +138,26 @@ class BinaryClassifier(nn.Module):
         x = self.fc4(x)
         x = self.sigmoid(x)
         return x
+
+
+class SimpleBinaryClassifier(nn.Module):
+    def __init__(self, dropout_rate=0.0):
+        super().__init__()
+        self.fc1 = None
+        self.relu = nn.ReLU()
+        self.dropout = nn.Dropout(dropout_rate)
+        self.fc2 = nn.Linear(32, 1)
+        self.sigmoid = nn.Sigmoid()
+
+    def forward(self, x):
+        x = torch.flatten(x, start_dim=1)
+        input_size = x.shape[1]
+        if self.fc1 is None:
+            self.fc1 = nn.Linear(input_size, 32)
+            self.fc1.to(x.device)
+        x = self.fc1(x)
+        x = self.relu(x)
+        x = self.dropout(x)
+        x = self.fc2(x)
+        x = self.sigmoid(x)
+        return x

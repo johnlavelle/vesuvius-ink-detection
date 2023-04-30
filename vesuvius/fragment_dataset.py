@@ -10,7 +10,8 @@ from torch.utils.data import Dataset
 from xarray import DataArray
 
 from vesuvius.datapoints import Datapoint, DatapointTuple
-from vesuvius.sampler import BaseCropBox, CropBoxSobol, CropBoxRegular, VolumeSamplerRndXYZ, VolumeSamplerRegularZ
+from vesuvius.sampler import BaseCropBox, CropBoxSobol, CropBoxRegular, VolumeSamplerRndXYZ, VolumeSamplerRegularZ, \
+    BaseVolumeSampler
 from vesuvius.utils import CustomDataLoaderError
 
 
@@ -51,7 +52,7 @@ class BaseDataset(ABC, Dataset):
         ...
 
     @lru_cache(maxsize=None)
-    def get_sampler(self, seed) -> VolumeSamplerRndXYZ:
+    def get_sampler(self, seed) -> BaseVolumeSampler:
         return self.volume_sampler_cls(self.ds,
                                        self.box_width_xy,
                                        self.box_width_z,
