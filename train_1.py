@@ -4,14 +4,20 @@ from itertools import islice
 
 import dask
 import torch
+from torch.nn import BCEWithLogitsLoss
 
 from src import tensorboard_access
+from vesuvius import ann
 from vesuvius.ann import models
 from vesuvius.ann.criterions import FocalLoss
+from vesuvius.config import Configuration
 from vesuvius.config import ConfigurationModel
 from vesuvius.dataloader import test_loader, get_train_loaders
+from vesuvius.sample_processors import SampleXYZ
+from vesuvius.sampler import CropBoxRegular
 from vesuvius.trackers import Track
 from vesuvius.trainer import BaseTrainer
+from vesuvius.trainer import centre_pixel
 from vesuvius.utils import timer
 
 # If READ_EXISTING_CONFIG is False, config is specified in Configuration (below)
@@ -88,9 +94,25 @@ if __name__ == '__main__':
 
     config_model0 = ConfigurationModel(
         model=models.HybridModel(),
+        criterion=BCEWithLogitsLoss(),
         learning_rate=0.03,
         total_steps=10_000_000,
         epochs=EPOCHS)
+
+    config = Configuration(
+        volume_dataset_cls=SampleXYZ,
+        crop_box_cls=CropBoxRegular,
+        suffix_cache='regular',
+        label_fn=centre_pixel,
+        transformers=ann.transforms.transform1,
+        shuffle=False,
+        group_pixels=True,
+        balance_ink=True,
+        batch_size=32,
+        stride_xy=91,
+        stride_z=6,
+        num_workers=0,
+        model0=config_model0)
 
     train_loaders = partial(
         get_train_loaders,
@@ -107,7 +129,7 @@ if __name__ == '__main__':
             trainer1 = Trainer1(train_loaders,
                                 test_loader,
                                 track,
-                                )
+                                config)
 
             for i, train in enumerate(trainer1):
                 train.forward().loss()
@@ -119,4 +141,4 @@ if __name__ == '__main__':
                 if i % VALIDATE_INTERVAL == 0:
                     train.validate()
 
-            train.save_model_output()
+            train.save_model()

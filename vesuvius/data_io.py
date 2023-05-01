@@ -154,18 +154,18 @@ def read_dataset_from_zarr(fragment: Union[int, str], workers: int, prefix: str,
 
 # Models
 class SaveModel:
-    def __init__(self, path, name: Union[str, int] = ''):
-        self.name = str(name)
-        if self.name:
-            self.name = '_' + self.name
+    def __init__(self, path):
+
         self.path = path
+        self.name = ''
         self.conf_path = join(self.path, f"config{self.name}.json")
-        self.model_path = join(self.path, f"model{self.name}.pt")
         os.makedirs(self.path, exist_ok=True)
 
-    def model(self, torch_model: nn.Module) -> str:
-        torch.save(torch_model.state_dict(), self.model_path)
-        return self.model_path
+    def model(self, torch_model: nn.Module, name: Union[str, int] = '') -> str:
+        self.name = str(name)
+        model_path = join(self.path, f"model{self.name}.pt")
+        torch.save(torch_model.state_dict(), model_path)
+        return model_path
 
     def config(self, config: Configuration) -> str:
         config_dict = asdict(config, dict_factory=lambda obj: {k: serialize(v) for k, v in obj})

@@ -83,7 +83,7 @@ class Track:
         self.incrementer = Incrementer()
 
         log_subdir = os.path.join("output/runs", current_time)
-        self.saver = SaveModel(log_subdir, 1)
+        self.saver = SaveModel(log_subdir)
         self.writer = SummaryWriter(self.log_subdir, flush_secs=60)
         self.logger_loss = TrackerAvg('loss/train', self.writer)
         self.logger_test_loss = TrackerAvg('loss/test', self.writer)

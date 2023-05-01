@@ -46,7 +46,8 @@ class BaseTrainer(ABC):
 
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
         print(f'Using device: {self.device}', '\n')
-        self.model0, self.optimizer0, self.scheduler0, self.criterion0 = self.setup_model(self.config.model0)
+        self.last_model = self.config.model0
+        self.model0, self.optimizer0, self.scheduler0, self.criterion0 = self.setup_model(self.last_model)
         self._check_model()
         self.get_train_test_loaders()
 
@@ -91,17 +92,19 @@ class BaseTrainer(ABC):
     def validate(self) -> None:
         ...
 
-    def save_model_output(self):
-        self.config.update_nn_kwargs(self.optimizer0, self.scheduler0, self.criterion0, self.learning_rate, self.epochs)
+    def _save_model(self, model, suffix: str = '') -> None:
         self.config['performance_dict'] = {'loss/train': self.trackers.logger_loss.average,
                                            'loss/test': self.trackers.logger_test_loss.average,
                                            'steps': self.trackers.incrementer.count}
-        self.trackers.saver.model0(self.model0)
+        self.trackers.saver.model(model, suffix)
         json_file_path = self.trackers.saver.config(self.config)
         with open(json_file_path, 'r') as file:
             data = json.load(file)
         config_json = json.dumps(data, indent=4)
         self.trackers.writer.add_text('config', config_json)
+
+    def save_model(self):
+        self._save_model(self.model0, suffix='0')
 
     def trainer_generator(self) -> Generator[Type['BaseTrainer'], None, None]:
         while self.trackers.incrementer.loop < self.loops:
@@ -129,7 +132,7 @@ class BaseTrainer(ABC):
 
     def __str__(self) -> str:
         loop = self.trackers.incrementer.loop
-        lr = self.config.model0.learning_rate
+        lr = self.last_model.learning_rate
         epochs = self.epochs
         batch_size = self.batch_size
         return f"Current Loop: {loop}, Learning Rate: {lr}, Epochs: {epochs}, Batch Size: {batch_size}"
@@ -137,7 +140,7 @@ class BaseTrainer(ABC):
     def __repr__(self) -> str:
         classname = self.__class__.__name__
         loop = self.trackers.incrementer.loop
-        lr = self.config.model0.learning_rate
+        lr = self.last_model.learning_rate
         epochs = self.epochs
         batch_size = self.batch_size
         return f"{classname}(current_loop={loop}, learning_rate={lr}, epochs={epochs}, batch_size={batch_size})"

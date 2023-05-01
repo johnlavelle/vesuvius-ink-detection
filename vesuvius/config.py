@@ -65,17 +65,6 @@ class Configuration:
     performance_dict: Optional[Dict[str, Any]] = None
     extra_dict: Optional[Dict[str, Any]] = None
 
-    def update_nn_kwargs(self, optimizer_: Any, scheduler_: Any, criterion_: Any, learning_rate: float, epochs: int):
-        reprs = {'optimizer': str(optimizer_.__repr__),
-                 'scheduler': str(scheduler_.__class__),
-                 'criterion': str(criterion_.__class__),
-                 'learning_rate': learning_rate,
-                 'epochs': epochs}
-        for k, v in reprs.items():
-            if k in self.nn_dict and self.nn_dict[k] != v:
-                print(f"Warning: {k} will be updated from {self.nn_dict[k]} in the config to {v}")
-            self.nn_dict[k] = v
-
     def __post_init__(self):
         if self.nn_dict is None:
             self.nn_dict = {}
@@ -110,6 +99,11 @@ class Configuration:
 def serialize(obj: Any) -> Any:
     if isinstance(obj, type):
         return obj.__name__
+    elif hasattr(obj, "as_dict"):
+        return {
+            "class": obj.__class__.__name__,
+            "params": obj.as_dict()
+        }
     elif isinstance(obj, transforms.Compose):
         return "Compose([{}])".format(", ".join([serialize(transform) for transform in obj.transforms]))
     elif callable(obj):

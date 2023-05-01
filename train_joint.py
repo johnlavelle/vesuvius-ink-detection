@@ -5,11 +5,12 @@ from itertools import repeat, chain, cycle, islice
 import dask
 import torch
 from torch import nn
-from torch.utils.data import DataLoader
 from torch.nn import BCEWithLogitsLoss
+from torch.utils.data import DataLoader
 
 from src import tensorboard_access
 from vesuvius import ann
+from vesuvius.ann import models
 from vesuvius.config import Configuration
 from vesuvius.config import ConfigurationModel
 from vesuvius.dataloader import get_train_loader_regular_z
@@ -18,7 +19,6 @@ from vesuvius.sampler import CropBoxRegular
 from vesuvius.trackers import Track
 from vesuvius.trainer import BaseTrainer, centre_pixel
 from vesuvius.utils import timer
-from vesuvius.ann import models
 
 # If READ_EXISTING_CONFIG is False, config is specified in Configuration (below)
 # else config is read from CONFIG_PATH.
@@ -42,7 +42,8 @@ class JointTrainer(BaseTrainer):
         self.labels = None
         self.outputs_collected = None
         self.labels_collected = None
-        self.model1, self.optimizer1, self.scheduler1, self.criterion1 = self.setup_model(self.config.model1)
+        self.last_model = self.config.model1
+        self.model1, self.optimizer1, self.scheduler1, self.criterion1 = self.setup_model(self.last_model)
 
     def setup_model(self, model_object):
         args = super().setup_model(model_object)
@@ -137,23 +138,12 @@ class JointTrainer(BaseTrainer):
         self.test_loader_len = len(test_loader)
         self.test_loader_iter = cycle(iter(test_loader))
 
-    def __str__(self) -> str:
-        loop = self.trackers.incrementer.loop
-        lr = self.config.model1.learning_rate
-        epochs = self.epochs
-        batch_size = self.batch_size
-        return f"Current Loop: {loop}, Learning Rate: {lr}, Epochs: {epochs}, Batch Size: {batch_size}"
-
-    def __repr__(self) -> str:
-        classname = self.__class__.__name__
-        loop = self.trackers.incrementer.loop
-        lr = self.config.model1.learning_rate
-        epochs = self.epochs
-        batch_size = self.batch_size
-        return f"{classname}(current_loop={loop}, learning_rate={lr}, epochs={epochs}, batch_size={batch_size})"
-
+    def save_model(self):
+        self._save_model(self.model0, suffix='0')
+        self._save_model(self.model1, suffix='1')
 
 # get_train_loader_regular_z = partial(get_train_loader_regular_z, force_cache_reset=False)
+
 
 if __name__ == '__main__':
     try:
@@ -161,8 +151,8 @@ if __name__ == '__main__':
     except RuntimeError:
         print('Failed to get public tensorboard URL')
 
-    EPOCHS = 30
-    TOTAL_STEPS = 10_000_000
+    EPOCHS = 1
+    TOTAL_STEPS = 300
     VALIDATE_INTERVAL = 500
     LOG_INTERVAL = 50
 
@@ -196,7 +186,6 @@ if __name__ == '__main__':
         model1=config_model1)
 
     with Track() as track, timer("Training"):
-
         trainer = JointTrainer(get_train_loader_regular_z,
                                get_train_loader_regular_z,
                                track,
@@ -212,4 +201,5 @@ if __name__ == '__main__':
             if i % VALIDATE_INTERVAL == 0:
                 train.validate()
                 train.trackers.log_test()
-        train.save_model_output()
+            break
+        train.save_model()

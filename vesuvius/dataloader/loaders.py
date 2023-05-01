@@ -66,7 +66,7 @@ def cached_data_loader(cfg: Configuration, reset_cache: bool = False, test_data=
 
         # Save the output of the data loader to a zarr file
 
-        total = cfg.training_steps // cfg.batch_size
+        total = cfg.model0.total_steps // cfg.batch_size
         running_sample_len = 0
         datapoint: Datapoint
         for i, datapoint in tqdm(enumerate(train_loader),
@@ -134,7 +134,7 @@ def test_loader(cfg: Configuration) -> DataLoader:
     test_dataset = cfg.volume_dataset_cls(ds_test,
                                           cfg.box_width_xy,
                                           cfg.box_width_z,
-                                          max_iterations=cfg.training_steps,
+                                          max_iterations=cfg.model0.total_steps,
                                           crop_cls=cfg.crop_box_cls,
                                           label_operation=cfg.label_fn,
                                           balance_ink=cfg.balance_ink,
