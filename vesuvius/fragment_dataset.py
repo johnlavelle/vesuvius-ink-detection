@@ -214,4 +214,4 @@ class CachedDataset(Dataset):
         return dp
 
     def __len__(self):
-        return len(self.hash_mappings)
+        return len(self.ds_grp)

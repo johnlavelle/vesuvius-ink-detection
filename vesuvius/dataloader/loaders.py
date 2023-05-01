@@ -61,12 +61,12 @@ def cached_data_loader(cfg: Configuration, reset_cache: bool = False, test_data=
     if not os.path.isdir(zarr_dir):
         os.makedirs(cache_dir, exist_ok=True)
 
-        train_loader = get_train_loader(cfg, worker_init=worker_init)
+        train_loader = get_train_dataset(cfg, worker_init=worker_init)
         saver = SaveModel(cache_dir)
 
         # Save the output of the data loader to a zarr file
 
-        total = cfg.model0.total_steps // cfg.batch_size
+        total = cfg.total_steps_max // cfg.batch_size
         running_sample_len = 0
         datapoint: Datapoint
         for i, datapoint in tqdm(enumerate(train_loader),
@@ -103,11 +103,11 @@ def cached_data_loader(cfg: Configuration, reset_cache: bool = False, test_data=
     return CachedDataset(ds, transformers=cfg.transformers, group_size=cfg.batch_size, group_pixels=cfg.group_pixels)
 
 
-def get_train_loader(cfg: Configuration,
-                     cached=False,
-                     reset_cache=False,
-                     worker_init='diff',
-                     test_data=False) -> Union[DataLoader, Dataset]:
+def get_train_dataset(cfg: Configuration,
+                      cached=False,
+                      reset_cache=False,
+                      worker_init='diff',
+                      test_data=False) -> Union[DataLoader, Dataset]:
     if reset_cache and not cached:
         raise ValueError("reset_cache can only be True if cached is also True")
     if cached:
@@ -127,14 +127,14 @@ def get_test_dataset(test_box_fragment, num_workers, prefix, x_start, x_stop, y_
     return ds_test
 
 
-def test_loader(cfg: Configuration) -> DataLoader:
+def get_test_loader(cfg: Configuration) -> DataLoader:
     """Hold back data test box for fragment 1"""
     ds_test = get_test_dataset(cfg.test_box_fragment, cfg.num_workers, cfg.prefix,
                                cfg.test_box[0], cfg.test_box[2], cfg.test_box[1], cfg.test_box[3])
     test_dataset = cfg.volume_dataset_cls(ds_test,
                                           cfg.box_width_xy,
                                           cfg.box_width_z,
-                                          max_iterations=cfg.model0.total_steps,
+                                          max_iterations=cfg.steps,
                                           crop_cls=cfg.crop_box_cls,
                                           label_operation=cfg.label_fn,
                                           balance_ink=cfg.balance_ink,
@@ -143,7 +143,7 @@ def test_loader(cfg: Configuration) -> DataLoader:
     return DataLoader(test_dataset, batch_size=cfg.batch_size, shuffle=False, num_workers=cfg.num_workers)
 
 
-def get_train_loader_regular_z(cfg: dataclass, force_cache_reset, test_data=False) -> DataLoader:
+def get_dataset_regular_z(cfg: dataclass, force_cache_reset, test_data=False) -> DataLoader:
     def collate_catch_errs(batch):
         filtered_batch = []
         for item in batch:
@@ -157,12 +157,12 @@ def get_train_loader_regular_z(cfg: dataclass, force_cache_reset, test_data=Fals
             return None
 
     cfg.collate_fn = collate_catch_errs
-    return get_train_loader(cfg, cached=True, reset_cache=force_cache_reset, worker_init='same', test_data=test_data)
+    return get_train_dataset(cfg, cached=True, reset_cache=force_cache_reset, worker_init='same', test_data=test_data)
 
 
-def get_train_loaders(cfg, epochs, cached_data, force_cache_reset, reset_cache_epoch_interval) \
+def get_train_datasets(cfg, epochs, cached_data, force_cache_reset, reset_cache_epoch_interval) \
         -> Generator[Datapoint, None, None]:
     for epoch in range(epochs):
         reset_cache = cached_data and (epoch != 0 and epoch % reset_cache_epoch_interval == 0)
         reset_cache = reset_cache or (epoch == 0 and force_cache_reset)
-        yield from get_train_loader(cfg, cached=cached_data, reset_cache=reset_cache)
+        yield from get_train_dataset(cfg, cached=cached_data, reset_cache=reset_cache)

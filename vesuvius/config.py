@@ -1,10 +1,9 @@
-import copy
 import multiprocessing as mp
 import warnings
 
 from torch.nn import Module
 import torchvision.transforms as transforms
-from dataclasses import dataclass, field, asdict
+from dataclasses import dataclass, field, asdict, InitVar
 from typing import Union, Optional, Callable, List, Tuple, Any, Type, Dict
 try:
     from typing import Protocol
@@ -22,13 +21,25 @@ class ConfigurationModel:
     model: Module = HybridModel()
     learning_rate: float = 0.03
     l1_lambda: float = 0
-    total_steps: int = 10_000
-    epochs: int = 1
     criterion: Module = None
     optimizer_scheduler_cls: Type[optimisers.OptimiserScheduler] = optimisers.SGDOneCycleLR
     optimizer_scheduler: optimisers.OptimiserScheduler = field(init=False)
+    _total_steps: int = field(init=False, default=0)
 
     def __post_init__(self):
+        self._total_steps = self.total_steps
+        self.update_optimizer_scheduler()
+
+    @property
+    def total_steps(self):
+        return self._total_steps
+
+    @total_steps.setter
+    def total_steps(self, value):
+        self._total_steps = value
+        self.update_optimizer_scheduler()
+
+    def update_optimizer_scheduler(self):
         self.optimizer_scheduler = self.optimizer_scheduler_cls(self.model, self.learning_rate, self.total_steps)
 
 
@@ -39,6 +50,8 @@ width, height = 2045, 2048
 @dataclass
 class Configuration:
     info: str = ""
+    total_steps_max: int = 10_000
+    epochs: int = 1
     volume_dataset_cls: Optional[Type[BaseDataset]] = None
     crop_box_cls: Optional[Type[BaseCropBox]] = None
     label_fn: Callable[..., Any] = None
@@ -49,8 +62,8 @@ class Configuration:
     test_box_fragment: int = 2
     box_width_xy: int = 91
     box_width_z: int = 6
-    stride_xy: Optional[int] = 91
-    stride_z: Optional[int] = 6
+    stride_xy: Optional[int] = None
+    stride_z: Optional[int] = None
     balance_ink: bool = True
     shuffle: bool = True
     group_pixels: bool = False
@@ -64,12 +77,42 @@ class Configuration:
     model1: Optional[ConfigurationModel] = None
     performance_dict: Optional[Dict[str, Any]] = None
     extra_dict: Optional[Dict[str, Any]] = None
+    _steps: int = field(default=10_000, init=False)
+    _epochs: int = field(default=1, init=False)
 
-    def __post_init__(self):
-        if self.nn_dict is None:
-            self.nn_dict = {}
-        if self.extra_dict is None:
-            self.extra_dict = {}
+    @property
+    def total_steps(self):
+        return self.steps * self.epochs
+
+    @total_steps.setter
+    def total_steps(self, value):
+        raise AttributeError("Cannot set total_steps directly. Update steps and/or epochs instead.")
+
+    @property
+    def steps(self):
+        return self._steps
+
+    @steps.setter
+    def steps(self, value):
+        self._steps = value
+        self.update_configuration_model()
+
+    def update_configuration_model(self):
+        total_steps = self.get_total_steps()
+        if self.model0 is not None:
+            self.model0.total_steps = total_steps
+            self.model0.update_optimizer_scheduler()
+        if self.model1 is not None:
+            self.model1.total_steps = total_steps
+            self.model1.update_optimizer_scheduler()
+
+    def get_total_steps(self):
+        return self._steps * self._epochs
+
+    def __post_init__(self, *args, **kwargs):
+        self._steps = kwargs.get("steps", self.steps)
+        self._epochs = kwargs.get("epochs", self.epochs)
+        self.update_configuration_model()
         assert self.test_box_fragment in self.fragments, "Test box fragment must be in fragments"
 
         if (self.stride_xy is not None) or (self.stride_z is not None):
@@ -112,8 +155,7 @@ class Configuration:
             return obj
 
     def as_dict(self) -> Dict[str, Any]:
-        config_dict = asdict(self, dict_factory=lambda obj: {k: self.serialize(v) for k, v in obj})
-        return config_dict
+        return asdict(self, dict_factory=lambda obj: {k: self.serialize(v) for k, v in obj})
 
     def __getitem__(self, key: str):
         return getattr(self, key)

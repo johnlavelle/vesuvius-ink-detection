@@ -13,7 +13,7 @@ from vesuvius import ann
 from vesuvius.ann import models
 from vesuvius.config import Configuration
 from vesuvius.config import ConfigurationModel
-from vesuvius.dataloader import get_train_loader_regular_z
+from vesuvius.dataloader import get_dataset_regular_z
 from vesuvius.sample_processors import SampleXYZ
 from vesuvius.sampler import CropBoxRegular
 from vesuvius.trackers import Track
@@ -42,16 +42,16 @@ class JointTrainer(BaseTrainer):
         self.labels = None
         self.outputs_collected = None
         self.labels_collected = None
+        self.train_loader_iter = None
+        self.last_model = self.config.model1
+
+        self.get_train_test_loaders()
+
+        self.last_model = self.config.model0
+        self.model0, self.optimizer0, self.scheduler0, self.criterion0 = self.setup_model(self.last_model)
+
         self.last_model = self.config.model1
         self.model1, self.optimizer1, self.scheduler1, self.criterion1 = self.setup_model(self.last_model)
-
-    def setup_model(self, model_object):
-        args = super().setup_model(model_object)
-        if torch.cuda.device_count() >= 2:
-            self.model0 = nn.DataParallel(self.model0)
-            self.model1 = nn.DataParallel(self.model1)
-            print('Using DataParallel for training.')
-        return args
 
     def _apply_forward(self, datapoint) -> torch.Tensor:
         voxels = datapoint.voxels
@@ -120,17 +120,19 @@ class JointTrainer(BaseTrainer):
     def get_train_test_loaders(self) -> None:
         self.batch_size = round(self.config.batch_size / ((65 - self.config.stride_z) / self.config.stride_z + 1))
 
-        dataloader_train = DataLoader(self.train_loader(self.config, False, test_data=False),
+        dataloader_train = DataLoader(self.train_dataset,
                                       batch_size=self.batch_size,
                                       num_workers=self.config.num_workers,
                                       drop_last=True)
-        self.total = self.epochs * len(dataloader_train) * self.batch_size
-        self.loops = self.epochs * len(dataloader_train)
-        self.train_loader_iter = chain.from_iterable(repeat(dataloader_train, self.epochs))
+
+        config.steps = min(len(dataloader_train), config.total_steps_max)
+        self.loops = config.epochs * config.steps
+        self.train_loader_iter = chain.from_iterable(repeat(dataloader_train, config.epochs))
+        self.train_loader_iter = islice(self.train_loader_iter, config.total_steps_max)
 
         self.config_test = copy.copy(self.config)
         self.config_test.transformers = None
-        test_loader = DataLoader(self.train_loader(self.config_test, False, test_data=True),
+        test_loader = DataLoader(self.train_dataset,
                                  batch_size=self.batch_size,
                                  num_workers=self.config.num_workers,
                                  drop_last=True)
@@ -149,25 +151,23 @@ if __name__ == '__main__':
     except RuntimeError:
         print('Failed to get public tensorboard URL')
 
-    EPOCHS = 300
+    EPOCHS = 1000
     TOTAL_STEPS = 10_000_000
     VALIDATE_INTERVAL = 500
     LOG_INTERVAL = 50
 
     config_model0 = ConfigurationModel(
         model=models.HybridModel(),
-        learning_rate=0.03,
-        total_steps=TOTAL_STEPS,
-        epochs=EPOCHS)
+        learning_rate=0.03)
 
     config_model1 = ConfigurationModel(
         model=models.SimpleBinaryClassifier(0.5),
         learning_rate=config_model0.learning_rate,
-        total_steps=config_model0.total_steps,
-        epochs=config_model0.epochs,
         criterion=BCEWithLogitsLoss())
 
     config = Configuration(
+        total_steps_max=TOTAL_STEPS,
+        epochs=EPOCHS,
         volume_dataset_cls=SampleXYZ,
         crop_box_cls=CropBoxRegular,
         suffix_cache='regular',
@@ -183,11 +183,11 @@ if __name__ == '__main__':
         model0=config_model0,
         model1=config_model1)
 
+    train_dataset = get_dataset_regular_z(config, False, test_data=False)
+    test_dataset = get_dataset_regular_z(config, False, test_data=True)
+
     with Track() as track, timer("Training"):
-        trainer = JointTrainer(get_train_loader_regular_z,
-                               get_train_loader_regular_z,
-                               track,
-                               config)
+        trainer = JointTrainer(train_dataset, test_dataset, track, config)
 
         for i, train in enumerate(trainer):
             train.forward().forward2().loss().backward().step()

@@ -1,9 +1,10 @@
 import json
 from abc import ABC, abstractmethod
-from typing import Generator, Callable, Type, Tuple
+from typing import Generator, Any, Type, Tuple
 
 import numpy as np
 import torch
+from torch import nn
 from tqdm import tqdm
 from xarray import DataArray
 
@@ -18,13 +19,13 @@ def centre_pixel(da: DataArray) -> DataArray:
 class BaseTrainer(ABC):
 
     def __init__(self,
-                 train_loader: Callable,
-                 test_loader: Callable,
+                 train_dataset: Any,
+                 test_dataset: Any,
                  trackers: Track,
                  config: Configuration) -> None:
 
-        self.train_loader = train_loader
-        self.test_loader = test_loader
+        self.train_dataset = train_dataset
+        self.test_dataset = test_dataset
 
         self.config = config
         self.trackers = trackers
@@ -34,27 +35,24 @@ class BaseTrainer(ABC):
         self.test_loader_iter = None
         self.model0 = None
         self.batch_size = None
-        self.total = None
         self.loops = None
         self.os = None
-
-        self.training_steps = self.config.model0.total_steps
-        self.epochs = self.config.model0.epochs
-        self.batch_size = self.config.batch_size
-        self.total = self.epochs * self.training_steps
-        self.loops = self.total // self.batch_size
+        self.optimizer0, self.scheduler0, self.criterion0 = None, None, None
 
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
         print(f'Using device: {self.device}', '\n')
-        self.last_model = self.config.model0
-        self.model0, self.optimizer0, self.scheduler0, self.criterion0 = self.setup_model(self.last_model)
-        self._check_model()
-        self.get_train_test_loaders()
 
     def setup_model(self, model_object):
         model_n = model_object.model.to(self.device)
         os = model_object.optimizer_scheduler
-        return model_n, os.optimizer(), os.scheduler(), model_object.criterion
+        model_n = model_n
+        optimizer, scheduler, criterion = os.optimizer(), os.scheduler(), model_object.criterion
+
+        if torch.cuda.device_count() >= 2:
+            model_n = nn.DataParallel(model_n)
+            print('Using DataParallel for training.')
+
+        return model_n, optimizer, scheduler, criterion
 
     @abstractmethod
     def get_train_test_loaders(self) -> None:
@@ -132,7 +130,7 @@ class BaseTrainer(ABC):
 
     def __str__(self) -> str:
         loop = self.trackers.incrementer.loop
-        lr = self.last_model.learning_rate
+        lr = self.model0.learning_rate
         epochs = self.epochs
         batch_size = self.batch_size
         return f"Current Loop: {loop}, Learning Rate: {lr}, Epochs: {epochs}, Batch Size: {batch_size}"
@@ -140,7 +138,7 @@ class BaseTrainer(ABC):
     def __repr__(self) -> str:
         classname = self.__class__.__name__
         loop = self.trackers.incrementer.loop
-        lr = self.last_model.learning_rate
+        lr = self.model0.learning_rate
         epochs = self.epochs
         batch_size = self.batch_size
         return f"{classname}(current_loop={loop}, learning_rate={lr}, epochs={epochs}, batch_size={batch_size})"
