@@ -47,20 +47,21 @@ def cnn1_sequential():
 class HybridModel(nn.Module):
     def __init__(self, dropout_rate=0.3):
         super().__init__()
+        self.dropout_rate = dropout_rate
 
         self.conv1 = nn.Conv3d(1, 16, 3, 1, 1)
         self.bn1 = nn.BatchNorm3d(16)
-        self.dropout1 = nn.Dropout(dropout_rate)
+        self.dropout1 = nn.Dropout(self.dropout_rate)
         self.pool1 = nn.MaxPool3d(2, 2)
 
         self.conv2 = nn.Conv3d(16, 32, 3, 1, 1)
         self.bn2 = nn.BatchNorm3d(32)
-        self.dropout2 = nn.Dropout(dropout_rate)
+        self.dropout2 = nn.Dropout(self.dropout_rate)
         self.pool2 = nn.MaxPool3d(2, 2)
 
         self.conv3 = nn.Conv3d(32, 64, 3, 1, 1)
         self.bn3 = nn.BatchNorm3d(64)
-        self.dropout3 = nn.Dropout(dropout_rate)
+        self.dropout3 = nn.Dropout(self.dropout_rate)
         self.pool3 = nn.AdaptiveMaxPool3d((8, 8, 8))
 
         self.flatten = nn.Flatten(start_dim=1)
@@ -68,12 +69,12 @@ class HybridModel(nn.Module):
         # FCN part for scalar input
         self.fc_scalar = nn.Linear(1, 16)
         self.bn_scalar = nn.BatchNorm1d(16)
-        self.dropout_scalar = nn.Dropout(dropout_rate)
+        self.dropout_scalar = nn.Dropout(self.dropout_rate)
 
         # Combined layers (initialized later)
         self.fc_combined1 = nn.Linear(64 * 8 * 8 * 8 + 16, 128)
         self.bn_combined = nn.BatchNorm1d(128)
-        self.dropout_combined = nn.Dropout(dropout_rate)
+        self.dropout_combined = nn.Dropout(self.dropout_rate)
 
         self.fc_combined2 = nn.Linear(128, 1)
         self.sigmoid = nn.Sigmoid()
@@ -111,6 +112,11 @@ class HybridModel(nn.Module):
 
         return self.sigmoid(x)
 
+    def as_dict(self):
+        return {
+            'dropout_rate': self.dropout_rate
+        }
+
 
 class BinaryClassifier(nn.Module):
     def __init__(self):
@@ -143,9 +149,10 @@ class BinaryClassifier(nn.Module):
 class SimpleBinaryClassifier(nn.Module):
     def __init__(self, dropout_rate=0.0):
         super().__init__()
+        self.dropout_rate = dropout_rate
         self.fc1 = None
         self.relu = nn.ReLU()
-        self.dropout = nn.Dropout(dropout_rate)
+        self.dropout = nn.Dropout(self.dropout_rate)
         self.fc2 = nn.Linear(32, 1)
         self.sigmoid = nn.Sigmoid()
 
@@ -161,3 +168,8 @@ class SimpleBinaryClassifier(nn.Module):
         x = self.fc2(x)
         x = self.sigmoid(x)
         return x
+
+    def as_dict(self):
+        return {
+            'dropout_rate': self.dropout_rate
+        }

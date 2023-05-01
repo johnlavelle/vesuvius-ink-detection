@@ -142,8 +142,6 @@ class JointTrainer(BaseTrainer):
         self._save_model(self.model0, suffix='0')
         self._save_model(self.model1, suffix='1')
 
-# get_train_loader_regular_z = partial(get_train_loader_regular_z, force_cache_reset=False)
-
 
 if __name__ == '__main__':
     try:
@@ -151,8 +149,8 @@ if __name__ == '__main__':
     except RuntimeError:
         print('Failed to get public tensorboard URL')
 
-    EPOCHS = 1
-    TOTAL_STEPS = 300
+    EPOCHS = 300
+    TOTAL_STEPS = 10_000_000
     VALIDATE_INTERVAL = 500
     LOG_INTERVAL = 50
 
@@ -163,7 +161,7 @@ if __name__ == '__main__':
         epochs=EPOCHS)
 
     config_model1 = ConfigurationModel(
-        model=models.SimpleBinaryClassifier(),
+        model=models.SimpleBinaryClassifier(0.5),
         learning_rate=config_model0.learning_rate,
         total_steps=config_model0.total_steps,
         epochs=config_model0.epochs,
@@ -189,7 +187,7 @@ if __name__ == '__main__':
         trainer = JointTrainer(get_train_loader_regular_z,
                                get_train_loader_regular_z,
                                track,
-                               config=config)
+                               config)
 
         for i, train in enumerate(trainer):
             train.forward().forward2().loss().backward().step()
@@ -201,5 +199,4 @@ if __name__ == '__main__':
             if i % VALIDATE_INTERVAL == 0:
                 train.validate()
                 train.trackers.log_test()
-            break
         train.save_model()

@@ -33,7 +33,7 @@ from tqdm import tqdm
 from zarr.sync import ProcessSynchronizer
 
 from vesuvius.utils import normalise_images
-from vesuvius.config import Configuration, serialize
+from vesuvius.config import Configuration
 
 
 def read_tiffs(fragment: int, prefix: str) -> xr.Dataset:
@@ -168,7 +168,7 @@ class SaveModel:
         return model_path
 
     def config(self, config: Configuration) -> str:
-        config_dict = asdict(config, dict_factory=lambda obj: {k: serialize(v) for k, v in obj})
+        config_dict = config.as_dict()
         with open(self.conf_path, "w") as json_file:
             json.dump(config_dict, json_file, indent=4)
             return self.conf_path

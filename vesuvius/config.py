@@ -4,7 +4,7 @@ import warnings
 
 from torch.nn import Module
 import torchvision.transforms as transforms
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, asdict
 from typing import Union, Optional, Callable, List, Tuple, Any, Type, Dict
 try:
     from typing import Protocol
@@ -89,31 +89,34 @@ class Configuration:
         except AssertionError:
             raise NotImplementedError(error_message) from None
 
+    def serialize(self, obj: Any) -> Any:
+        if isinstance(obj, type):
+            return obj.__name__
+        elif hasattr(obj, "as_dict"):
+            return {
+                "class": obj.__class__.__name__,
+                "params": obj.as_dict()
+            }
+        elif isinstance(obj, transforms.Compose):
+            return "Compose([{}])".format(", ".join([self.serialize(transform) for transform in obj.transforms]))
+        elif callable(obj):
+            if hasattr(obj, '__name__'):
+                return obj.__name__
+            else:
+                return obj.__class__.__name__
+        elif isinstance(obj, (list, tuple)):
+            return [self.serialize(item) for item in obj]
+        elif hasattr(obj, "as_dict"):
+            return obj.as_dict()
+        else:
+            return obj
+
+    def as_dict(self) -> Dict[str, Any]:
+        config_dict = asdict(self, dict_factory=lambda obj: {k: self.serialize(v) for k, v in obj})
+        return config_dict
+
     def __getitem__(self, key: str):
         return getattr(self, key)
 
     def __setitem__(self, key: str, value: Any):
         setattr(self, key, value)
-
-
-def serialize(obj: Any) -> Any:
-    if isinstance(obj, type):
-        return obj.__name__
-    elif hasattr(obj, "as_dict"):
-        return {
-            "class": obj.__class__.__name__,
-            "params": obj.as_dict()
-        }
-    elif isinstance(obj, transforms.Compose):
-        return "Compose([{}])".format(", ".join([serialize(transform) for transform in obj.transforms]))
-    elif callable(obj):
-        if hasattr(obj, '__name__'):
-            return obj.__name__
-        else:
-            return obj.__class__.__name__
-    elif isinstance(obj, (list, tuple)):
-        return [serialize(item) for item in obj]
-    elif hasattr(obj, "as_dict"):
-        return obj.as_dict()
-    else:
-        return obj
