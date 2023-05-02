@@ -59,7 +59,10 @@ def cached_data_loader(cfg: Configuration, reset_cache: bool = False, test_data=
         shutil.rmtree(cache_dir, ignore_errors=True)
 
     if not os.path.isdir(zarr_dir):
-        os.makedirs(cache_dir, exist_ok=True)
+        try:
+            os.makedirs(cache_dir, exist_ok=True)
+        except FileExistsError:
+            pass
 
         train_loader = get_train_dataset(cfg, worker_init=worker_init)
         saver = SaveModel(cache_dir)
