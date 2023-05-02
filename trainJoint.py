@@ -77,6 +77,9 @@ class JointTrainer(BaseTrainer):
         return self.model0(voxels.to(self.device), scalar.to(self.device))
 
     def forward(self) -> 'JointTrainer':
+        self.optimizer0.zero_grad()
+        self.optimizer1.zero_grad()
+
         self.model0.train()
         self.outputs_collected = []
         self.labels_collected = []
@@ -102,8 +105,6 @@ class JointTrainer(BaseTrainer):
         return self
 
     def backward(self) -> 'JointTrainer':
-        self.optimizer0.zero_grad()
-        self.optimizer1.zero_grad()
         self._loss.backward()
         return self
 
