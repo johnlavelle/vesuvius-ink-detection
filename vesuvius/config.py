@@ -20,23 +20,23 @@ class ConfigurationModel:
     criterion: Module = None
     optimizer_scheduler_cls: Type[optimisers.OptimiserScheduler] = optimisers.SGDOneCycleLR
     optimizer_scheduler: optimisers.OptimiserScheduler = field(init=False)
-    _total_steps: int = field(init=False, default=0)
+    _total_loops: int = field(init=False, default=0)
 
     def __post_init__(self):
-        self._total_steps = self.total_steps
+        self._total_loops = self.total_loops
         self.update_optimizer_scheduler()
 
     @property
-    def total_steps(self):
-        return self._total_steps
+    def total_loops(self):
+        return self._total_loops
 
-    @total_steps.setter
-    def total_steps(self, value):
-        self._total_steps = value
+    @total_loops.setter
+    def total_loops(self, value):
+        self._total_loops = value
         self.update_optimizer_scheduler()
 
     def update_optimizer_scheduler(self):
-        self.optimizer_scheduler = self.optimizer_scheduler_cls(self.model, self.learning_rate, self.total_steps)
+        self.optimizer_scheduler = self.optimizer_scheduler_cls(self.model, self.learning_rate, self.total_loops)
 
 
 xl, yl = 2048, 7168  # lower left corner of the test box
@@ -73,12 +73,12 @@ class Configuration:
     model1: Optional[ConfigurationModel] = None
     performance_dict: Optional[Dict[str, Any]] = None
     extra_dict: Optional[Dict[str, Any]] = None
-    _steps: int = field(init=False, default=10_000)
+    _loops: int = field(init=False, default=10_000)
     _epochs: int = field(init=False, default=1)
 
     @property
     def total_steps(self):
-        return self.steps * self.epochs
+        return self.loops * self.epochs
 
     @total_steps.setter
     def total_steps(self, value):
@@ -94,28 +94,28 @@ class Configuration:
         self.update_configuration_model()
 
     @property
-    def steps(self):
-        return self._steps
+    def loops(self):
+        return self._loops
 
-    @steps.setter
-    def steps(self, value):
-        self._steps = value
+    @loops.setter
+    def loops(self, value):
+        self._loops = value
         self.update_configuration_model()
 
     def update_configuration_model(self):
         total_steps = self.get_total_steps()
         if self.model0 is not None:
-            self.model0.total_steps = total_steps
+            self.model0.total_loops = total_steps
             self.model0.update_optimizer_scheduler()
         if self.model1 is not None:
-            self.model1.total_steps = total_steps
+            self.model1.total_loops = total_steps
             self.model1.update_optimizer_scheduler()
 
     def get_total_steps(self):
-        return self._steps * self._epochs
+        return self._loops * self._epochs
 
     def __post_init__(self, *args, **kwargs):
-        self._steps = kwargs.get("steps", self.steps)
+        self._loops = kwargs.get("steps", self.loops)
         self._epochs = kwargs.get("epochs", self.epochs)
         self.update_configuration_model()
         assert self.test_box_fragment in self.fragments, "Test box fragment must be in fragments"

@@ -1,10 +1,11 @@
 import copy
+import dataclasses
 import pprint
 from itertools import repeat, chain, cycle, islice
+from typing import Any
 
 import dask
 import torch
-from torch import nn
 from torch.nn import BCEWithLogitsLoss
 from torch.utils.data import DataLoader
 
@@ -25,8 +26,24 @@ from vesuvius.utils import timer
 READ_CONFIG_FILE = False
 CONFIG_PATH = 'configs/config.json'
 
-pp = pprint.PrettyPrinter(indent=4)
+pp = pprint.PrettyPrinter(indent=4, sort_dicts=True)
 dask.config.set(scheduler='synchronous')
+
+
+def pretty_print_dataclass(obj: Any, indent: int = 4) -> str:
+    if not dataclasses.is_dataclass(obj):
+        return str(obj)
+
+    indent_str = ' ' * indent
+    result = obj.__class__.__name__ + "(\n"
+
+    for field in dataclasses.fields(obj):
+        field_value = getattr(obj, field.name)
+        field_value_str = pretty_print_dataclass(field_value, indent + 4)
+        result += f"{indent_str}{field.name}={field_value_str},\n"
+
+    result += ")"
+    print(result)
 
 
 class JointTrainer(BaseTrainer):
@@ -125,8 +142,7 @@ class JointTrainer(BaseTrainer):
                                       num_workers=self.config.num_workers,
                                       drop_last=True)
 
-        config.steps = min(len(dataloader_train), config.total_steps_max)
-        self.loops = config.epochs * config.steps
+        self.loops = min(len(dataloader_train), config.total_steps_max) * config.epochs
         self.train_loader_iter = chain.from_iterable(repeat(dataloader_train, config.epochs))
         self.train_loader_iter = islice(self.train_loader_iter, config.total_steps_max)
 

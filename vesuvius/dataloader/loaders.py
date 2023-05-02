@@ -137,7 +137,7 @@ def get_test_loader(cfg: Configuration) -> DataLoader:
     test_dataset = cfg.volume_dataset_cls(ds_test,
                                           cfg.box_width_xy,
                                           cfg.box_width_z,
-                                          max_iterations=cfg.steps,
+                                          max_iterations=cfg.loops,
                                           crop_cls=cfg.crop_box_cls,
                                           label_operation=cfg.label_fn,
                                           balance_ink=cfg.balance_ink,

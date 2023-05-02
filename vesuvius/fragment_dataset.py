@@ -169,6 +169,7 @@ class CachedDataset(Dataset):
         self.transformers = transformers
         self.hash_mappings = None
         self.ds = dataset
+        self.length = None
         self.group_by_pixel_index(group_pixels, group_size)
 
     def group_by_pixel_index(self, group_pixels, group_size):
@@ -179,12 +180,13 @@ class CachedDataset(Dataset):
 
             np.random.shuffle(index_set_reduced)
             self.hash_mappings = {i: v for i, v in enumerate(index_set_reduced)}
-
+            self.length = len(index_set_reduced)
             self.ds_grp = self.ds.groupby('fxy_idx')
         else:
             self.hash_mappings = None
 
             self.ds_grp = self.ds.groupby(self.ds.sample // group_size)
+            self.length = len(self.ds_grp)
 
     def idx_mapping(self, index: int) -> int:
         if self.hash_mappings:
@@ -196,6 +198,7 @@ class CachedDataset(Dataset):
         try:
             ds = self.ds_grp[self.idx_mapping(index)]
         except KeyError:
+            print(f'Index {index} not found in dataset')
             raise IndexError
 
         dp = Datapoint(ds['voxels'],
@@ -214,4 +217,4 @@ class CachedDataset(Dataset):
         return dp
 
     def __len__(self):
-        return len(self.ds_grp)
+        return self.length
