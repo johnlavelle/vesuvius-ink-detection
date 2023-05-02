@@ -249,7 +249,7 @@ def open_dataset(zarr_path: str):
         ds = xr.open_zarr(zarr_path, consolidated=True)
         ds = rechunk_cached(ds)
         overhead_gb = (get_available_memory() - ds.nbytes) / (1024 * 1024 * 1024)
-        if overhead_gb > 4:
+        if overhead_gb > 10:
             print('Loading dataset into memory...', '\n')
             ds.load()
         else:

@@ -80,7 +80,7 @@ class JointTrainer(BaseTrainer):
 
     def loss(self) -> 'JointTrainer':
         base_loss = self.criterion1(self.output1, self.labels)
-        l1_regularization = torch.norm(self.model0.fc_scalar.weight, p=1)
+        l1_regularization = torch.norm(getattr(self.model0, 'module', self.model0).fc_scalar.weight, p=1)
         self._loss_joint = base_loss + (self.config.model1.l1_lambda * l1_regularization)
         self.trackers.update_train(self._loss_joint.item(), self.labels.shape[0])
         return self
