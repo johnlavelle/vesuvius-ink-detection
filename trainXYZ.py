@@ -28,7 +28,7 @@ pp = pprint.PrettyPrinter(indent=4)
 dask.config.set(scheduler='synchronous')
 
 
-class Trainer1(BaseTrainer):
+class TrainerXYZ(BaseTrainer):
 
     def __init__(self, *args, **kwargs) -> None:
         super().__init__(*args, **kwargs)
@@ -40,18 +40,11 @@ class Trainer1(BaseTrainer):
         self.last_model = self.config.model0
         self.model0, self.optimizer0, self.scheduler0, self.criterion0 = self.setup_model(self.last_model)
 
-    def get_train_test_loaders(self) -> None:
-        self.test_loader_iter = lambda length: islice(self.test_dataset, length)
-        config.steps = min(len(self.train_dataset), config.total_steps_max)
-        self.train_loader_iter = chain.from_iterable(repeat(self.train_dataset, config.epochs))
-        self.train_loader_iter = islice(self.train_loader_iter, self.config.total_steps_max)
-        self.loops = config.epochs * config.steps
-
     def _apply_forward(self, datapoint) -> torch.Tensor:
         scalar = (datapoint.z_start / (65 - self.config.box_width_z)).view(-1, 1).float()
         return self.model0(datapoint.voxels.to(self.device), scalar.to(self.device))
 
-    def validate(self) -> 'BaseTrainer':
+    def validate(self) -> 'TrainerXYZ':
         self.model0.eval()
         with torch.no_grad():
             for datapoint_test in self.test_loader_iter(self.config.validation_steps):
@@ -62,13 +55,13 @@ class Trainer1(BaseTrainer):
         self.trackers.log_test()
         return self
 
-    def forward(self) -> 'BaseTrainer':
+    def forward(self) -> 'TrainerXYZ':
         self.model0.train()
         self.optimizer0.zero_grad()
         self.outputs = self._apply_forward(self.datapoint)
         return self
 
-    def loss(self) -> 'BaseTrainer':
+    def loss(self) -> 'TrainerXYZ':
         target = self.datapoint.label.float().to(self.device)
 
         base_loss = self.criterion0(self.outputs, target)
@@ -80,14 +73,21 @@ class Trainer1(BaseTrainer):
         self.trackers.logger_lr.update(self.scheduler0.get_last_lr()[0], batch_size)
         return self
 
-    def backward(self) -> 'BaseTrainer':
+    def backward(self) -> 'TrainerXYZ':
         self.loss_value.backward()
         return self
 
-    def step(self):
+    def step(self) -> 'TrainerXYZ':
         self.optimizer0.step()
         self.scheduler0.step()
         return self
+
+    def get_train_test_loaders(self) -> None:
+        self.test_loader_iter = lambda length: islice(self.test_dataset, length)
+        config.steps = min(len(self.train_dataset), config.total_steps_max)
+        self.train_loader_iter = chain.from_iterable(repeat(self.train_dataset, config.epochs))
+        self.train_loader_iter = islice(self.train_loader_iter, self.config.total_steps_max)
+        self.loops = config.epochs * config.steps
 
 
 xl, yl = 2048, 7168  # lower left corner of the test box
@@ -141,7 +141,7 @@ if __name__ == '__main__':
 
         with Track() as track, timer("Training"):
 
-            trainer1 = Trainer1(train_dataset, test_dataset, track, config)
+            trainer1 = TrainerXYZ(train_dataset, test_dataset, track, config)
 
             for i, train in enumerate(trainer1):
                 train.forward().loss().backward().step()
