@@ -5,8 +5,7 @@ from typing import Tuple
 import numpy as np
 import pandas as pd
 import xarray as xr
-from shapely import Point
-from shapely.geometry import Polygon
+from shapely.geometry import Polygon, Point
 from skimage.measure import find_contours
 from xarray import DataArray, Dataset
 

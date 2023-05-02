@@ -14,14 +14,10 @@ from dataclasses import asdict
 from functools import lru_cache
 from os.path import join
 from typing import Any, Tuple
-from typing import Dict, Union
+from typing import Dict, Union, Literal
 
 import psutil
 
-try:
-    from typing import Literal
-except ImportError:
-    from typing_extensions import Literal
 
 import dask
 import numpy as np

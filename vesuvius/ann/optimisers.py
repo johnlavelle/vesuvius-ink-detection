@@ -1,11 +1,7 @@
 from torch import nn as nn
 from torch import optim
-from typing import Dict, Any
-try:
-    from typing import Protocol
-except ImportError:
-    from typing_extensions import Protocol
-    
+from typing import Dict, Any, Protocol
+
 
 class OptimiserScheduler(Protocol):
     def __init__(self, model: nn.Module, learning_rate: float, total_steps: int):

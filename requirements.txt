@@ -21,6 +21,5 @@ torchmetrics
 torchsampler
 torchsummary
 tqdm
-typing_extensions
 xarray
 zarr
