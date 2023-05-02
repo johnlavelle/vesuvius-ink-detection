@@ -71,6 +71,7 @@ class Configuration:
     nn_dict: Optional[Dict[str, Any]] = None
     model0: Optional[ConfigurationModel] = None
     model1: Optional[ConfigurationModel] = None
+    accumulation_steps: int = None
     performance_dict: Optional[Dict[str, Any]] = None
     extra_dict: Optional[Dict[str, Any]] = None
     _loops: int = field(init=False, default=10_000)

@@ -81,7 +81,7 @@ class JointTrainer(BaseTrainer):
         self.model0.train()
         self.outputs_collected = []
         self.labels_collected = []
-        for _ in range(5):
+        for _ in range(config.accumulation_steps):
             output = self._apply_forward(self.datapoint)
             self.outputs_collected.append(output.reshape(self.datapoint.label.shape[:2]))
             self.labels_collected.append(self.datapoint.label.float().mean(dim=1))
@@ -196,11 +196,14 @@ if __name__ == '__main__':
         stride_xy=91,
         stride_z=6,
         num_workers=0,
+        accumulation_steps=5,
         model0=config_model0,
         model1=config_model1)
 
     train_dataset = get_dataset_regular_z(config, False, test_data=False)
     test_dataset = get_dataset_regular_z(config, False, test_data=True)
+
+    pretty_print_dataclass(config)
 
     with Track() as track, timer("Training"):
         trainer = JointTrainer(train_dataset, test_dataset, track, config)
