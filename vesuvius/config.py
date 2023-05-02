@@ -74,12 +74,12 @@ class Configuration:
     accumulation_steps: int = None
     performance_dict: Optional[Dict[str, Any]] = None
     extra_dict: Optional[Dict[str, Any]] = None
-    _loops: int = field(init=False, default=10_000)
+    _loops_per_epoch: int = field(init=False, default=10_000)
     _epochs: int = field(init=False, default=1)
 
     @property
     def total_steps(self):
-        return self.loops * self.epochs
+        return self.loops_per_epoch * self.epochs
 
     @total_steps.setter
     def total_steps(self, value):
@@ -95,12 +95,12 @@ class Configuration:
         self.update_configuration_model()
 
     @property
-    def loops(self):
-        return self._loops
+    def loops_per_epoch(self):
+        return self._loops_per_epoch
 
-    @loops.setter
-    def loops(self, value):
-        self._loops = value
+    @loops_per_epoch.setter
+    def loops_per_epoch(self, value):
+        self._loops_per_epoch = value
         self.update_configuration_model()
 
     def update_configuration_model(self):
@@ -113,10 +113,10 @@ class Configuration:
             self.model1.update_optimizer_scheduler()
 
     def get_total_steps(self):
-        return self._loops * self._epochs
+        return self._loops_per_epoch * self._epochs
 
     def __post_init__(self, *args, **kwargs):
-        self._loops = kwargs.get("steps", self.loops)
+        self._loops_per_epoch = kwargs.get("steps", self.loops_per_epoch)
         self._epochs = kwargs.get("epochs", self.epochs)
         self.update_configuration_model()
         assert self.test_box_fragment in self.fragments, "Test box fragment must be in fragments"

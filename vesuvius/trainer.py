@@ -35,7 +35,7 @@ class BaseTrainer(ABC):
         self.test_loader_iter = None
         self.model0 = None
         self.batch_size = None
-        self.loops = None
+        self.total_loops = None
         self.os = None
         self.optimizer0, self.scheduler0, self.criterion0 = None, None, None
 
@@ -45,7 +45,6 @@ class BaseTrainer(ABC):
     def setup_model(self, model_object):
         model_n = model_object.model.to(self.device)
         os = model_object.optimizer_scheduler
-        model_n = model_n
         optimizer, scheduler, criterion = os.optimizer(), os.scheduler(), model_object.criterion
 
         if torch.cuda.device_count() >= 2:
@@ -105,7 +104,7 @@ class BaseTrainer(ABC):
         self._save_model(self.model0, suffix='0')
 
     def trainer_generator(self) -> Generator[Type['BaseTrainer'], None, None]:
-        while self.trackers.incrementer.loop < self.loops:
+        while self.trackers.incrementer.loop < self.total_loops:
             try:
                 next(self)
             except StopIteration:
@@ -113,14 +112,14 @@ class BaseTrainer(ABC):
             yield self
 
     def __next__(self) -> 'BaseTrainer':
-        if self.trackers.incrementer.loop >= self.loops:
+        if self.trackers.incrementer.loop >= self.total_loops:
             raise StopIteration
         self.datapoint = next(self.train_loader_iter)
         self.trackers.increment(len(self.datapoint.label))
         return self
 
     def __iter__(self):
-        tqdm_kwargs = dict(total=self.loops, disable=False, desc='Training', position=0)
+        tqdm_kwargs = dict(total=self.total_loops, disable=False, desc='Training', position=0)
         try:
             for item in tqdm(self.trainer_generator(), **tqdm_kwargs):
                 yield item

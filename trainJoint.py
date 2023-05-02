@@ -6,6 +6,7 @@ from typing import Any
 
 import dask
 import torch
+from torch import autograd
 from torch.nn import BCEWithLogitsLoss
 from torch.utils.data import DataLoader
 
@@ -55,7 +56,6 @@ class JointTrainer(BaseTrainer):
         self.test_loader_len = None
         self.inputs = None
         self._loss = None
-        self._loss_joint = None
         self.labels = None
         self.outputs_collected = None
         self.labels_collected = None
@@ -64,11 +64,10 @@ class JointTrainer(BaseTrainer):
 
         self.get_train_test_loaders()
 
-        self.last_model = self.config.model0
-        self.model0, self.optimizer0, self.scheduler0, self.criterion0 = self.setup_model(self.last_model)
+        pretty_print_dataclass(config)
 
-        self.last_model = self.config.model1
-        self.model1, self.optimizer1, self.scheduler1, self.criterion1 = self.setup_model(self.last_model)
+        self.model0, self.optimizer0, self.scheduler0, self.criterion0 = self.setup_model(self.config.model0)
+        self.model1, self.optimizer1, self.scheduler1, self.criterion1 = self.setup_model(self.config.model1)
 
     def _apply_forward(self, datapoint) -> torch.Tensor:
         voxels = datapoint.voxels
@@ -98,14 +97,14 @@ class JointTrainer(BaseTrainer):
     def loss(self) -> 'JointTrainer':
         base_loss = self.criterion1(self.output1, self.labels)
         l1_regularization = torch.norm(getattr(self.model0, 'module', self.model0).fc_scalar.weight, p=1)
-        self._loss_joint = base_loss + (self.config.model1.l1_lambda * l1_regularization)
-        self.trackers.update_train(self._loss_joint.item(), self.labels.shape[0])
+        self._loss = base_loss + (self.config.model1.l1_lambda * l1_regularization)
+        self.trackers.update_train(self._loss.item(), self.labels.shape[0])
         return self
 
     def backward(self) -> 'JointTrainer':
         self.optimizer0.zero_grad()
         self.optimizer1.zero_grad()
-        self._loss_joint.backward()
+        self._loss.backward()
         return self
 
     def step(self) -> 'JointTrainer':
@@ -142,7 +141,9 @@ class JointTrainer(BaseTrainer):
                                       num_workers=self.config.num_workers,
                                       drop_last=True)
 
-        self.loops = min(len(dataloader_train), config.total_steps_max) * config.epochs
+        self.total_loops = min(len(dataloader_train), config.total_steps_max) * config.epochs
+        config.loops_per_epoch = min(len(dataloader_train), config.total_steps_max)
+        self.total_loops = config.loops_per_epoch * config.epochs
         self.train_loader_iter = chain.from_iterable(repeat(dataloader_train, config.epochs))
         self.train_loader_iter = islice(self.train_loader_iter, config.total_steps_max)
 
@@ -167,7 +168,7 @@ if __name__ == '__main__':
     except RuntimeError:
         print('Failed to get public tensorboard URL')
 
-    EPOCHS = 1000
+    EPOCHS = 600
     TOTAL_STEPS = 10_000_000
     VALIDATE_INTERVAL = 500
     LOG_INTERVAL = 50
@@ -203,9 +204,7 @@ if __name__ == '__main__':
     train_dataset = get_dataset_regular_z(config, False, test_data=False)
     test_dataset = get_dataset_regular_z(config, False, test_data=True)
 
-    pretty_print_dataclass(config)
-
-    with Track() as track, timer("Training"):
+    with Track() as track, autograd.detect_anomaly(check_nan=False), timer("Training"):
         trainer = JointTrainer(train_dataset, test_dataset, track, config)
 
         for i, train in enumerate(trainer):
