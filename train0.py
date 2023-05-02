@@ -99,7 +99,7 @@ if __name__ == '__main__':
 
     config_model0 = ConfigurationModel(
         model=models.HybridModel(),
-        criterion=BCEWithLogitsLoss(),
+        criterion=FocalLoss(),
         learning_rate=0.03)
 
     config = Configuration(
@@ -123,10 +123,10 @@ if __name__ == '__main__':
     #     force_cache_reset=FORCE_CACHE_RESET,
     #     reset_cache_epoch_interval=RESET_CACHE_EPOCH_INTERVAL)
 
-    train_dataset = get_train_dataset(config, cached=True, reset_cache=False)
-    test_dataset = get_test_loader(config)
-
     for alpha, gamma in [(1, 0), (0.25, 2), (0.5, 2), (0.75, 2)]:
+
+        train_dataset = get_train_dataset(config, cached=True, reset_cache=False)
+        test_dataset = get_test_loader(config)
 
         criterion = FocalLoss(alpha=alpha, gamma=gamma)
 
@@ -143,5 +143,4 @@ if __name__ == '__main__':
                     train.trackers.log_train()
                 if i % VALIDATE_INTERVAL == 0:
                     train.validate()
-
             train.save_model()

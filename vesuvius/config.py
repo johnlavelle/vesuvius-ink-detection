@@ -77,8 +77,8 @@ class Configuration:
     model1: Optional[ConfigurationModel] = None
     performance_dict: Optional[Dict[str, Any]] = None
     extra_dict: Optional[Dict[str, Any]] = None
-    _steps: int = field(default=10_000, init=False)
-    _epochs: int = field(default=1, init=False)
+    _steps: int = field(init=False, default=10_000)
+    _epochs: int = field(init=False, default=1)
 
     @property
     def total_steps(self):
@@ -87,6 +87,15 @@ class Configuration:
     @total_steps.setter
     def total_steps(self, value):
         raise AttributeError("Cannot set total_steps directly. Update steps and/or epochs instead.")
+
+    @property
+    def epochs(self):
+        return self._epochs
+
+    @epochs.setter
+    def epochs(self, value):
+        self._epochs = value
+        self.update_configuration_model()
 
     @property
     def steps(self):
