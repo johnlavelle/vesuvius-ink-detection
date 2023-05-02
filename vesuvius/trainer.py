@@ -43,15 +43,15 @@ class BaseTrainer(ABC):
         print(f'Using device: {self.device}', '\n')
 
     def setup_model(self, model_object):
-        model_n = model_object.model.to(self.device)
+        model_ = model_object.model.to(self.device)
         os = model_object.optimizer_scheduler
         optimizer, scheduler, criterion = os.optimizer(), os.scheduler(), model_object.criterion
 
         if torch.cuda.device_count() >= 2:
-            model_n = nn.DataParallel(model_n)
+            model_ = nn.DataParallel(model_)
             print('Using DataParallel for training.')
 
-        return model_n, optimizer, scheduler, criterion
+        return model_, optimizer, scheduler, criterion
 
     @abstractmethod
     def get_train_test_loaders(self) -> None:
@@ -100,8 +100,9 @@ class BaseTrainer(ABC):
         config_json = json.dumps(data, indent=4)
         self.trackers.writer.add_text('config', config_json)
 
+    @abstractmethod
     def save_model(self):
-        self._save_model(self.model0, suffix='0')
+        ...
 
     def trainer_generator(self) -> Generator[Type['BaseTrainer'], None, None]:
         while self.trackers.incrementer.loop < self.total_loops:

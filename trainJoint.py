@@ -171,8 +171,8 @@ if __name__ == '__main__':
 
     EPOCHS = 600
     TOTAL_STEPS = 10_000_000
-    VALIDATE_INTERVAL = 500
-    LOG_INTERVAL = 50
+    VALIDATE_INTERVAL = 5000
+    LOG_INTERVAL = 100
 
     config_model0 = ConfigurationModel(
         model=models.HybridModel(),
