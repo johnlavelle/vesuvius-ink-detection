@@ -130,15 +130,15 @@ class BaseTrainer(ABC):
 
     def __str__(self) -> str:
         loop = self.trackers.incrementer.loop
-        lr = self.model0.learning_rate
-        epochs = self.epochs
+        lr = self.config.model0.learning_rate
+        epochs = self.config.epochs
         batch_size = self.batch_size
         return f"Current Loop: {loop}, Learning Rate: {lr}, Epochs: {epochs}, Batch Size: {batch_size}"
 
     def __repr__(self) -> str:
         classname = self.__class__.__name__
         loop = self.trackers.incrementer.loop
-        lr = self.model0.learning_rate
-        epochs = self.epochs
-        batch_size = self.batch_size
+        lr = self.config.model0.learning_rate
+        epochs = self.config.epochs
+        batch_size = self.config.batch_size
         return f"{classname}(current_loop={loop}, learning_rate={lr}, epochs={epochs}, batch_size={batch_size})"

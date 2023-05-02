@@ -32,6 +32,9 @@ class Trainer1(BaseTrainer):
 
     def __init__(self, *args, **kwargs) -> None:
         super().__init__(*args, **kwargs)
+
+        self.loss_value = None
+
         self.get_train_test_loaders()
 
         self.last_model = self.config.model0
@@ -70,14 +73,20 @@ class Trainer1(BaseTrainer):
 
         base_loss = self.criterion0(self.outputs, target)
         l1_regularization = torch.norm(self.model0.fc_scalar.weight, p=1)
-        loss = base_loss + (self.config.model0.l1_lambda * l1_regularization)
-        loss.backward()
-        self.optimizer0.step()
-        self.scheduler0.step()
+        self.loss_value = base_loss + (self.config.model0.l1_lambda * l1_regularization)
 
         batch_size = len(self.datapoint.voxels)
-        self.trackers.logger_loss.update(loss.item(), batch_size)
+        self.trackers.logger_loss.update(self.loss_value.item(), batch_size)
         self.trackers.logger_lr.update(self.scheduler0.get_last_lr()[0], batch_size)
+        return self
+
+    def backward(self) -> 'BaseTrainer':
+        self.loss_value.backward()
+        return self
+
+    def step(self):
+        self.optimizer0.step()
+        self.scheduler0.step()
         return self
 
 
@@ -135,7 +144,7 @@ if __name__ == '__main__':
             trainer1 = Trainer1(train_dataset, test_dataset, track, config)
 
             for i, train in enumerate(trainer1):
-                train.forward().loss()
+                train.forward().loss().backward().step()
 
                 if i == 0:
                     continue
