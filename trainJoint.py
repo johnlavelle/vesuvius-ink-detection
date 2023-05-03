@@ -87,14 +87,14 @@ class JointTrainer(BaseTrainer):
             output = self._apply_forward(self.datapoint)
             self.outputs_collected.append(output.reshape(self.datapoint.label.shape[:2]))
             self.labels_collected.append(self.datapoint.label.float().mean(dim=1))
-        self.outputs = torch.cat(self.outputs_collected, dim=0)
+        self.output0 = torch.cat(self.outputs_collected, dim=0)
         self.labels = torch.cat(self.labels_collected, dim=0)
         self.labels = self.labels.to(self.device)
         return self
 
     def forward2(self) -> 'JointTrainer':
         self.model1.train()
-        self.output1 = self.model1(self.outputs)
+        self.output1 = self.model1(self.output0)
         return self
 
     def loss(self) -> 'JointTrainer':

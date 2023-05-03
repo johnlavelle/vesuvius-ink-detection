@@ -85,10 +85,12 @@ class TrainerXYZ(BaseTrainer):
     def get_train_test_loaders(self) -> None:
         self.test_loader_iter = lambda length: islice(self.test_dataset, length)
         config.loops_per_epoch = min(len(self.train_dataset), config.total_steps_max)
-        self.loops = config.epochs * config.loops_per_epoch // self.batch_size
         self.train_loader_iter = chain.from_iterable(repeat(self.train_dataset, config.epochs))
         self.train_loader_iter = islice(self.train_loader_iter, self.config.total_steps_max)
-        self.loops = config.epochs * config.loops_per_epoch
+        self.total_loops = config.epochs * config.loops_per_epoch
+
+    def save_model(self):
+        self._save_model(self.model0, suffix='0')
 
 
 xl, yl = 2048, 7168  # lower left corner of the test box

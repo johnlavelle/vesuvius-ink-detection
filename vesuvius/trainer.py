@@ -29,7 +29,7 @@ class BaseTrainer(ABC):
 
         self.config = config
         self.trackers = trackers
-        self.datapoint = self.outputs = None
+        self.datapoint = self.output0 = None
 
         self.train_loader_iter = None
         self.test_loader_iter = None
