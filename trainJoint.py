@@ -140,7 +140,8 @@ class JointTrainer(BaseTrainer):
         dataloader_train = DataLoader(self.train_dataset,
                                       batch_size=self.batch_size,
                                       num_workers=self.config.num_workers,
-                                      drop_last=True)
+                                      drop_last=True,
+                                      pin_memory=True)
 
         self.total_loops = min(len(dataloader_train), config.total_steps_max) * config.epochs
         config.loops_per_epoch = min(len(dataloader_train), config.total_steps_max)
@@ -153,7 +154,8 @@ class JointTrainer(BaseTrainer):
         test_loader = DataLoader(self.train_dataset,
                                  batch_size=self.batch_size,
                                  num_workers=self.config.num_workers,
-                                 drop_last=True)
+                                 drop_last=True,
+                                 pin_memory=True)
 
         self.test_loader_len = len(test_loader)
         self.test_loader_iter = cycle(iter(test_loader))
@@ -169,13 +171,13 @@ if __name__ == '__main__':
     except RuntimeError:
         print('Failed to get public tensorboard URL')
 
-    EPOCHS = 600
+    EPOCHS = 30
     TOTAL_STEPS = 10_000_000
-    VALIDATE_INTERVAL = 5000
+    VALIDATE_INTERVAL = 1000
     LOG_INTERVAL = 100
 
     config_model0 = ConfigurationModel(
-        model=models.HybridModel(),
+        model=models.HybridModel(dropout_rate=0.3, width_multiplier=1),
         learning_rate=0.03)
 
     config_model1 = ConfigurationModel(
@@ -197,7 +199,7 @@ if __name__ == '__main__':
         batch_size=32,
         stride_xy=91,
         stride_z=6,
-        num_workers=0,
+        num_workers=2,
         accumulation_steps=5,
         model0=config_model0,
         model1=config_model1)

@@ -45,22 +45,23 @@ def cnn1_sequential():
 
 
 class HybridModel(nn.Module):
-    def __init__(self, dropout_rate=0.3):
+    def __init__(self, dropout_rate: float = 0.3, width_multiplier: int = 4):
         super().__init__()
         self.dropout_rate = dropout_rate
+        self.width_multiplier = width_multiplier
 
-        self.conv1 = nn.Conv3d(1, 16, 3, 1, 1)
-        self.bn1 = nn.BatchNorm3d(16)
+        self.conv1 = nn.Conv3d(1, 4 * self.width_multiplier, 3, 1, 1)
+        self.bn1 = nn.BatchNorm3d(4 * self.width_multiplier)
         self.dropout1 = nn.Dropout(self.dropout_rate)
         self.pool1 = nn.MaxPool3d(2, 2)
 
-        self.conv2 = nn.Conv3d(16, 32, 3, 1, 1)
-        self.bn2 = nn.BatchNorm3d(32)
+        self.conv2 = nn.Conv3d(4 * self.width_multiplier, 8 * self.width_multiplier, 3, 1, 1)
+        self.bn2 = nn.BatchNorm3d(8 * self.width_multiplier)
         self.dropout2 = nn.Dropout(self.dropout_rate)
         self.pool2 = nn.MaxPool3d(2, 2)
 
-        self.conv3 = nn.Conv3d(32, 64, 3, 1, 1)
-        self.bn3 = nn.BatchNorm3d(64)
+        self.conv3 = nn.Conv3d(8 * self.width_multiplier, 16 * self.width_multiplier, 3, 1, 1)
+        self.bn3 = nn.BatchNorm3d(16 * self.width_multiplier)
         self.dropout3 = nn.Dropout(self.dropout_rate)
         self.pool3 = nn.AdaptiveMaxPool3d((8, 8, 8))
 
@@ -72,7 +73,7 @@ class HybridModel(nn.Module):
         self.dropout_scalar = nn.Dropout(self.dropout_rate)
 
         # Combined layers (initialized later)
-        self.fc_combined1 = nn.Linear(64 * 8 * 8 * 8 + 16, 128)
+        self.fc_combined1 = nn.Linear(16 * 8 * 8 * 8 * self.width_multiplier + 16, 128)
         self.bn_combined = nn.BatchNorm1d(128)
         self.dropout_combined = nn.Dropout(self.dropout_rate)
 
@@ -114,7 +115,8 @@ class HybridModel(nn.Module):
 
     def as_dict(self):
         return {
-            'dropout_rate': self.dropout_rate
+            'dropout_rate': self.dropout_rate,
+            'width_multiplier': self.width_multiplier
         }
 
 
