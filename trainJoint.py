@@ -1,4 +1,5 @@
 import copy
+import time
 import pprint
 from itertools import repeat, chain, islice
 
@@ -154,6 +155,8 @@ class JointTrainer(BaseTrainer):
 
 
 if __name__ == '__main__':
+    start_time = time.time()
+
     try:
         print('Tensorboard URL: ', tensorboard_access.get_public_url(), '\n')
     except RuntimeError:
@@ -161,6 +164,7 @@ if __name__ == '__main__':
 
     EPOCHS = 300
     TOTAL_STEPS = 10_000_000
+    MAX_HOURS = 0.01
     VALIDATE_INTERVAL = 5000
     LOG_INTERVAL = 100
 
@@ -196,18 +200,21 @@ if __name__ == '__main__':
     train_dataset = get_dataset_regular_z(config, False, test_data=False)
     test_dataset = get_dataset_regular_z(config, False, test_data=True)
 
-    with Track() as track, autograd.detect_anomaly(check_nan=False), timer("Training"):
+    with Track() as track, timer("Training"):
         trainer = JointTrainer(train_dataset, test_dataset, track, config)
+
+        max_duration = MAX_HOURS * 3600  # convert hours to seconds
 
         for i, train in enumerate(trainer):
             train.forward().forward2().loss().backward().step()
 
             if i == 0:
                 continue
+            if time.time() - start_time >= max_duration:
+                train.save_model()
             if i % LOG_INTERVAL == 0:
                 train.trackers.log_train()
             if i % VALIDATE_INTERVAL == 0:
                 train.validate()
                 train.trackers.log_test()
         train.save_model()
-
