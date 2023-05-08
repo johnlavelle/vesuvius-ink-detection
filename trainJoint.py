@@ -164,9 +164,11 @@ if __name__ == '__main__':
 
     EPOCHS = 300
     TOTAL_STEPS = 10_000_000
-    MAX_HOURS = 0.01
+    SAVE_INTERVAL_MINUTES = 30
     VALIDATE_INTERVAL = 5000
     LOG_INTERVAL = 100
+
+    save_interval_seconds = SAVE_INTERVAL_MINUTES * 60
 
     config_model0 = ConfigurationModel(
         model=models.HybridModel(dropout_rate=0.3, width_multiplier=1),
@@ -188,10 +190,10 @@ if __name__ == '__main__':
         shuffle=False,
         group_pixels=True,
         balance_ink=True,
-        batch_size=32,
+        batch_size=5 * 32,
         stride_xy=91,
         stride_z=6,
-        num_workers=2,
+        num_workers=1,
         validation_steps=100,
         accumulation_steps=1,
         model0=config_model0,
@@ -203,15 +205,15 @@ if __name__ == '__main__':
     with Track() as track, timer("Training"):
         trainer = JointTrainer(train_dataset, test_dataset, track, config)
 
-        max_duration = MAX_HOURS * 3600  # convert hours to seconds
-
         for i, train in enumerate(trainer):
+            pass
             train.forward().forward2().loss().backward().step()
 
             if i == 0:
                 continue
-            if time.time() - start_time >= max_duration:
-                train.save_model()
+            if time.time() - start_time >= save_interval_seconds:
+                train.save_model()  # save the model
+                start_time = time.time()  # reset the start_time for the next save interval
             if i % LOG_INTERVAL == 0:
                 train.trackers.log_train()
             if i % VALIDATE_INTERVAL == 0:
