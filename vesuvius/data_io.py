@@ -239,7 +239,7 @@ def rechunk_cached(ds: xr.Dataset) -> xr.Dataset:
     return xr.open_zarr(zarr_path, consolidated=True)
 
 
-@lru_cache(maxsize=1)
+@lru_cache(maxsize=2)
 def open_dataset(zarr_path: str):
     with dask.config.set(scheduler='synchronous'):
         ds = xr.open_zarr(zarr_path, consolidated=True)
@@ -254,6 +254,7 @@ def open_dataset(zarr_path: str):
         return ds
 
 
+@lru_cache(maxsize=2)
 def get_dataset(zarr_path: str, fragment: Union[int, str], hold_back_box: Tuple[int, int, int, int], test_data=False):
     with dask.config.set(scheduler='synchronous'):
         ds = open_dataset(zarr_path)

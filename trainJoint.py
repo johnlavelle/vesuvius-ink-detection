@@ -1,8 +1,7 @@
 import copy
-import dataclasses
 import pprint
-from itertools import repeat, chain, cycle, islice
-from typing import Any
+from itertools import repeat, chain, islice
+
 
 import dask
 import torch
@@ -20,7 +19,8 @@ from vesuvius.sample_processors import SampleXYZ
 from vesuvius.sampler import CropBoxRegular
 from vesuvius.trackers import Track
 from vesuvius.trainer import BaseTrainer, centre_pixel
-from vesuvius.utils import timer
+from vesuvius.utils import timer, pretty_print_dataclass
+
 
 # If READ_EXISTING_CONFIG is False, config is specified in Configuration (below)
 # else config is read from CONFIG_PATH.
@@ -31,29 +31,12 @@ pp = pprint.PrettyPrinter(indent=4, sort_dicts=True)
 dask.config.set(scheduler='synchronous')
 
 
-def pretty_print_dataclass(obj: Any, indent: int = 4) -> str:
-    if not dataclasses.is_dataclass(obj):
-        return str(obj)
-
-    indent_str = ' ' * indent
-    result = obj.__class__.__name__ + "(\n"
-
-    for field in dataclasses.fields(obj):
-        field_value = getattr(obj, field.name)
-        field_value_str = pretty_print_dataclass(field_value, indent + 4)
-        result += f"{indent_str}{field.name}={field_value_str},\n"
-
-    result += ")"
-    print(result)
-
-
 class JointTrainer(BaseTrainer):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self.output0 = None
         self.output1 = None
         self.config_test = None
-        self.test_loader_len = None
         self.inputs = None
         self._loss = None
         self.labels = None
@@ -83,7 +66,10 @@ class JointTrainer(BaseTrainer):
         self.model0.train()
         self.outputs_collected = []
         self.labels_collected = []
-        for _ in range(config.accumulation_steps):
+        for s in range(config.accumulation_steps):
+            if s != 0:
+                self.__next__()
+                # self.datapoint = next(self.train_loader_iter)
             output = self._apply_forward(self.datapoint)
             self.outputs_collected.append(output.reshape(self.datapoint.label.shape[:2]))
             self.labels_collected.append(self.datapoint.label.float().mean(dim=1))
@@ -118,10 +104,9 @@ class JointTrainer(BaseTrainer):
     def validate(self) -> 'JointTrainer':
         self.model0.eval()
         self.model1.eval()
-        iterations = self.config.validation_steps
-        iterations = round(self.config.batch_size * (iterations / self.config.batch_size))
+
         with torch.no_grad():
-            for datapoint_test in islice(self.test_loader_iter, iterations):
+            for datapoint_test in self.test_loader_iter:
                 output0 = self._apply_forward(datapoint_test)
                 output0 = output0.reshape(datapoint_test.label.shape[:2])
                 output1 = self.model1(output0)
@@ -157,8 +142,11 @@ class JointTrainer(BaseTrainer):
                                  drop_last=True,
                                  pin_memory=True)
 
-        self.test_loader_len = len(test_loader)
-        self.test_loader_iter = cycle(iter(test_loader))
+        iterations = self.config.validation_steps
+        iterations = round(self.config.batch_size * (iterations / self.config.batch_size))
+
+        self.test_loader_iter = iter(test_loader)
+        self.test_loader_iter = list(islice(self.test_loader_iter, iterations))
 
     def save_model(self):
         self._save_model(self.model0, suffix='0')
@@ -171,9 +159,9 @@ if __name__ == '__main__':
     except RuntimeError:
         print('Failed to get public tensorboard URL')
 
-    EPOCHS = 30
+    EPOCHS = 300
     TOTAL_STEPS = 10_000_000
-    VALIDATE_INTERVAL = 1000
+    VALIDATE_INTERVAL = 5000
     LOG_INTERVAL = 100
 
     config_model0 = ConfigurationModel(
@@ -200,7 +188,8 @@ if __name__ == '__main__':
         stride_xy=91,
         stride_z=6,
         num_workers=2,
-        accumulation_steps=5,
+        validation_steps=100,
+        accumulation_steps=1,
         model0=config_model0,
         model1=config_model1)
 
@@ -221,3 +210,4 @@ if __name__ == '__main__':
                 train.validate()
                 train.trackers.log_test()
         train.save_model()
+

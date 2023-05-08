@@ -1,6 +1,7 @@
+import dataclasses
 from contextlib import contextmanager
 from timeit import default_timer
-from typing import Tuple
+from typing import Tuple, Any
 
 import numpy as np
 import pandas as pd
@@ -81,3 +82,19 @@ def timer(name):
 
 class CustomDataLoaderError(Exception):
     pass
+
+
+def pretty_print_dataclass(obj: Any, indent: int = 4) -> str:
+    if not dataclasses.is_dataclass(obj):
+        return str(obj)
+
+    indent_str = ' ' * indent
+    result = obj.__class__.__name__ + "(\n"
+
+    for field in dataclasses.fields(obj):
+        field_value = getattr(obj, field.name)
+        field_value_str = pretty_print_dataclass(field_value, indent + 4)
+        result += f"{indent_str}{field.name}={field_value_str},\n"
+
+    result += ")"
+    print(result)
