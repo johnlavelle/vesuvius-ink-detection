@@ -32,7 +32,7 @@ class TrainerXYZ(BaseTrainer):
 
     def __init__(self, *args, **kwargs) -> None:
         super().__init__(*args, **kwargs)
-
+        self.outputs = None
         self.loss_value = None
 
         self.get_train_test_loaders()
@@ -100,13 +100,13 @@ if __name__ == '__main__':
 
     pp = pprint.PrettyPrinter(indent=4)
     dask.config.set(scheduler='synchronous')
-    print('Tensorboard URL: ', tensorboard_access.get_public_url(), '\n')
+    # print('Tensorboard URL: ', tensorboard_access.get_public_url(), '\n')
 
     FORCE_CACHE_RESET = False  # Deletes cache. Only used if CACHED_DATA is True.
-    EPOCHS = 2
+    EPOCHS = 1
     RESET_CACHE_EPOCH_INTERVAL = EPOCHS
     SAVE_INTERVAL = 1_000_000
-    VALIDATE_INTERVAL = 1000
+    VALIDATE_INTERVAL = 500
     LOG_INTERVAL = 100
 
     config_model0 = ConfigurationModel(
@@ -135,7 +135,12 @@ if __name__ == '__main__':
     #     force_cache_reset=FORCE_CACHE_RESET,
     #     reset_cache_epoch_interval=RESET_CACHE_EPOCH_INTERVAL)
 
-    for alpha, gamma in [(1, 0), (0.25, 2), (0.5, 2), (0.75, 2)]:
+    for alpha, gamma in [
+        # (1, 0),
+        (0.25, 2),
+        # (0.5, 2),
+        # (0.75, 2)
+      ]:
 
         train_dataset = get_train_dataset(config, cached=True, reset_cache=False)
         test_dataset = get_test_loader(config)

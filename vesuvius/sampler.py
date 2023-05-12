@@ -99,9 +99,9 @@ class CropBoxRegular(BaseCropBox):
         self.l_bounds = np.array([self.bounds[0],
                                   self.bounds[1],
                                   self.bounds[2]])
-        self.u_bounds = np.array([self.bounds[3] - self.width_xy,
-                                  self.bounds[4] - self.width_xy,
-                                  self.bounds[5] - self.width_z])
+        self.u_bounds = np.array([self.bounds[3] - self.width_xy + 2,
+                                  self.bounds[4] - self.width_xy + 2,
+                                  self.bounds[5] - self.width_z + 2])
         seed = 98  # Override seed
         rng = np.random.default_rng(seed) if seed is not None else None
         self.sampler = list(self.xyz_sampler(self.l_bounds, self.u_bounds, self.stride_xy, self.stride_z, rng))

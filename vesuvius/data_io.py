@@ -30,6 +30,7 @@ from zarr.sync import ProcessSynchronizer
 
 from vesuvius.utils import normalise_images
 from vesuvius.config import Configuration
+from vesuvius.ann.transforms import *
 
 
 def read_tiffs(fragment: int, prefix: str) -> xr.Dataset:
@@ -170,26 +171,6 @@ class SaveModel:
             return self.conf_path
 
 
-class LoadModel:
-    def __init__(self, config_path, model_path):
-        self.config_path = config_path
-        self.model_path = model_path
-        self._config = self._load_config()
-
-    def model(self) -> nn.Module:
-        _model = self._config.mode0()
-        _model.load_state_dict(torch.load(self.model_path))
-        return self._config.mode0()
-
-    def _load_config(self) -> Configuration:
-        with open(self.config_path, "r") as json_file:
-            config_dict = json.load(json_file)
-        return Configuration(**config_dict)
-
-    def config(self) -> Configuration:
-        return self._config
-
-
 def get_available_memory() -> int:
     mem = psutil.virtual_memory()
     return mem.available
@@ -262,3 +243,9 @@ def get_dataset(zarr_path: str, fragment: Union[int, str], hold_back_box: Tuple[
             hold_back_bools = get_hold_back_bools(ds, fragment, hold_back_box)
             ds = ds.isel(sample=hold_back_bools)
         return ds
+
+
+if __name__ == '__main__':
+    base_path = '/home/john/code/kaggle/vesuvius-ink-detection/configs/'
+    lm = LoadModel(join(base_path, 'trainXYZ'), join(base_path, 'trainXYZ/model0.pt'))
+    lm.config()

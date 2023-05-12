@@ -1,12 +1,10 @@
 import copy
-import time
 import pprint
+import time
 from itertools import repeat, chain, islice
-
 
 import dask
 import torch
-from torch import autograd
 from torch.nn import BCEWithLogitsLoss
 from torch.utils.data import DataLoader
 
@@ -16,12 +14,12 @@ from vesuvius.ann import models
 from vesuvius.config import Configuration
 from vesuvius.config import ConfigurationModel
 from vesuvius.dataloader import get_dataset_regular_z
+from vesuvius.datapoints import DatapointTuple
 from vesuvius.sample_processors import SampleXYZ
 from vesuvius.sampler import CropBoxRegular
 from vesuvius.trackers import Track
 from vesuvius.trainer import BaseTrainer, centre_pixel
 from vesuvius.utils import timer, pretty_print_dataclass
-
 
 # If READ_EXISTING_CONFIG is False, config is specified in Configuration (below)
 # else config is read from CONFIG_PATH.
@@ -55,9 +53,9 @@ class JointTrainer(BaseTrainer):
 
     def _apply_forward(self, datapoint) -> torch.Tensor:
         voxels = datapoint.voxels
-        dim0, dim1 = voxels.shape[:2]
-        voxels = voxels.reshape(dim0 * dim1, *voxels.shape[2:])
-        scalar = (datapoint.z_start / (65 - self.config.box_width_z)).view(-1, 1).float()
+        # dim0, dim1 = voxels.shape[:2]
+        # voxels = voxels.reshape(dim0 * dim1, *voxels.shape[2:])
+        scalar = datapoint.label
         return self.model0(voxels.to(self.device), scalar.to(self.device))
 
     def forward(self) -> 'JointTrainer':
@@ -70,14 +68,21 @@ class JointTrainer(BaseTrainer):
         for s in range(config.accumulation_steps):
             if s != 0:
                 self.__next__()
-                # self.datapoint = next(self.train_loader_iter)
             output = self._apply_forward(self.datapoint)
             self.outputs_collected.append(output.reshape(self.datapoint.label.shape[:2]))
             self.labels_collected.append(self.datapoint.label.float().mean(dim=1))
+
         self.output0 = torch.cat(self.outputs_collected, dim=0)
+        self.output0 = self.reshape_output0(self.output0, config.accumulation_steps)
+
         self.labels = torch.cat(self.labels_collected, dim=0)
+        self.labels = self.reshape_output0(self.labels, config.accumulation_steps).mean(dim=1)
         self.labels = self.labels.to(self.device)
         return self
+
+    def reshape_output0(self, output0, accumulation_steps):
+        length = 65 // self.config.box_sub_width_z
+        return output0.view(accumulation_steps * self.config.batch_size, length, 1)
 
     def forward2(self) -> 'JointTrainer':
         self.model1.train()
@@ -108,10 +113,11 @@ class JointTrainer(BaseTrainer):
 
         with torch.no_grad():
             for datapoint_test in self.test_loader_iter:
+                datapoint_test = self.reshape_datapoint(datapoint_test)
                 output0 = self._apply_forward(datapoint_test)
-                output0 = output0.reshape(datapoint_test.label.shape[:2])
+                output0 = self.reshape_output0(output0, 1)
                 output1 = self.model1(output0)
-                labels = datapoint_test.label.float().mean(dim=1)
+                labels = self.reshape_output0(datapoint_test.label, 1).mean(dim=1)
                 labels = labels.to(self.device)
                 val_loss = self.criterion1(output1, labels)
                 self.trackers.update_test(val_loss.item(), len(labels))
@@ -153,6 +159,18 @@ class JointTrainer(BaseTrainer):
         self._save_model(self.model0, suffix='0')
         self._save_model(self.model1, suffix='1')
 
+    def reshape_datapoint(self, datapoint):
+        bsw = config.box_sub_width_z
+        kwargs = {k: v.repeat_interleave(65 // bsw, dim=0) for k, v in datapoint._asdict().items() if
+                  k != 'voxels'}
+        kwargs['label'] = kwargs['label'].squeeze(1).float()
+        kwargs['voxels'] = self.datapoint.voxels.reshape(self.batch_size * 65 // bsw, 1, bsw, 91, 91)
+        return DatapointTuple(**kwargs)
+
+    def __next__(self):
+        super().__next__()
+        self.datapoint = self.reshape_datapoint(self.datapoint)
+
 
 if __name__ == '__main__':
     start_time = time.time()
@@ -162,17 +180,22 @@ if __name__ == '__main__':
     except RuntimeError:
         print('Failed to get public tensorboard URL')
 
-    EPOCHS = 300
+    EPOCHS = 1
     TOTAL_STEPS = 10_000_000
     SAVE_INTERVAL_MINUTES = 30
-    VALIDATE_INTERVAL = 5000
-    LOG_INTERVAL = 100
+    VALIDATE_INTERVAL = 50
+    LOG_INTERVAL = 10
+    PRETRAINED_MODEL0 = False
 
     save_interval_seconds = SAVE_INTERVAL_MINUTES * 60
 
-    config_model0 = ConfigurationModel(
-        model=models.HybridModel(dropout_rate=0.3, width_multiplier=1),
-        learning_rate=0.03)
+    if PRETRAINED_MODEL0:
+        config0 = Configuration.from_dict('configs/trainXYZ/')
+        config_model0 = config0.model0.model
+    else:
+        config_model0 = ConfigurationModel(
+            model=models.HybridModel(dropout_rate=0.3, width_multiplier=1),
+            learning_rate=0.03)
 
     config_model1 = ConfigurationModel(
         model=models.SimpleBinaryClassifier(0.5),
@@ -190,12 +213,14 @@ if __name__ == '__main__':
         shuffle=False,
         group_pixels=True,
         balance_ink=True,
-        batch_size=5 * 32,
+        batch_size=4,
+        box_width_z=65,
+        box_sub_width_z=5,
         stride_xy=91,
-        stride_z=6,
-        num_workers=1,
+        stride_z=65,
+        num_workers=4,
         validation_steps=100,
-        accumulation_steps=1,
+        accumulation_steps=8,
         model0=config_model0,
         model1=config_model1)
 
@@ -206,7 +231,6 @@ if __name__ == '__main__':
         trainer = JointTrainer(train_dataset, test_dataset, track, config)
 
         for i, train in enumerate(trainer):
-            pass
             train.forward().forward2().loss().backward().step()
 
             if i == 0:
