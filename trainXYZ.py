@@ -84,9 +84,9 @@ class TrainerXYZ(BaseTrainer):
 
     def get_train_test_loaders(self) -> None:
         self.test_loader_iter = lambda length: islice(self.test_dataset, length)
-        config.loops_per_epoch = min(len(self.train_dataset), config.total_steps_max)
+        config.loops_per_epoch = min(len(self.train_dataset), config.samples_max)
         self.train_loader_iter = chain.from_iterable(repeat(self.train_dataset, config.epochs))
-        self.train_loader_iter = islice(self.train_loader_iter, self.config.total_steps_max)
+        self.train_loader_iter = islice(self.train_loader_iter, self.config.samples_max)
         self.total_loops = config.epochs * config.loops_per_epoch
 
     def save_model(self):
@@ -102,9 +102,7 @@ if __name__ == '__main__':
     dask.config.set(scheduler='synchronous')
     # print('Tensorboard URL: ', tensorboard_access.get_public_url(), '\n')
 
-    FORCE_CACHE_RESET = False  # Deletes cache. Only used if CACHED_DATA is True.
     EPOCHS = 1
-    RESET_CACHE_EPOCH_INTERVAL = EPOCHS
     SAVE_INTERVAL = 1_000_000
     VALIDATE_INTERVAL = 500
     LOG_INTERVAL = 100
@@ -116,7 +114,7 @@ if __name__ == '__main__':
 
     config = Configuration(
         epochs=EPOCHS,
-        total_steps_max=100_000,
+        samples_max=1000,
         volume_dataset_cls=SampleXYZ,
         crop_box_cls=CropBoxSobol,
         suffix_cache='sobol',
@@ -129,6 +127,7 @@ if __name__ == '__main__':
         num_workers=0,
         model0=config_model0)
 
+    print(config)
     # train_loaders = partial(
     #     get_train_datasets,
     #     cached_data=True,
@@ -149,9 +148,9 @@ if __name__ == '__main__':
 
         with Track() as track, timer("Training"):
 
-            trainer1 = TrainerXYZ(train_dataset, test_dataset, track, config)
+            trainer = TrainerXYZ(train_dataset, test_dataset, track, config)
 
-            for i, train in enumerate(trainer1):
+            for i, train in enumerate(trainer):
                 train.forward().loss().backward().step()
 
                 if i == 0:

@@ -49,7 +49,7 @@ class TorchDatasetIter(DatasetIter):
 
     def __init__(self, cfg: Configuration, datasets: DatasetIter):
         super().__init__(cfg)
-        self.training_steps = cfg.total_steps_max
+        self.training_steps = cfg.samples_max
         self.box_width_sample = cfg.box_width_xy
         self.dataset_class = cfg.volume_dataset_cls
         self.label_operation = cfg.label_fn
@@ -61,7 +61,7 @@ class TorchDatasetIter(DatasetIter):
         self.box_width_sample = cfg.box_width_xy
 
         self.label_operation = cfg.label_fn
-        self.samples = cfg.total_steps_max
+        self.samples = cfg.samples_max
         self.stride_xy = cfg.stride_xy
         self.stride_z = cfg.stride_z
 

@@ -1,6 +1,6 @@
 {
     "info": "",
-    "total_steps_max": 100000,
+    "samples_max": 1000,
     "volume_dataset_cls": "SampleXYZ",
     "crop_box_cls": "CropBoxSobol",
     "label_fn": "centre_pixel",
@@ -49,19 +49,13 @@
             "params": {
                 "model": "HybridModel",
                 "learning_rate": 0.03,
-                "total_steps": 3125
+                "total_steps": 1000
             }
         },
-        "_total_loops": 3125
+        "_total_loops": 1000
     },
     "model1": {
-        "model": {
-            "class": "HybridModel",
-            "params": {
-                "dropout_rate": 0.3,
-                "width_multiplier": 4
-            }
-        },
+        "model": null,
         "learning_rate": 0.03,
         "l1_lambda": 0,
         "criterion": null,
@@ -69,21 +63,21 @@
         "optimizer_scheduler": {
             "class": "SGDOneCycleLR",
             "params": {
-                "model": "HybridModel",
+                "model": "NoneType",
                 "learning_rate": 0.03,
-                "total_steps": 3125
+                "total_steps": 1000
             }
         },
-        "_total_loops": 3125
+        "_total_loops": 1000
     },
     "epochs": 1,
     "accumulation_steps": null,
     "performance_dict": {
-        "loss/train": 0.01555923376387606,
+        "loss/train": 0.017124117944728245,
         "loss/test": 0.0,
-        "steps": 100000
+        "steps": 32000
     },
     "extra_dict": null,
-    "_loops_per_epoch": 3125,
+    "_loops_per_epoch": 1000,
     "_epochs": 1
 }

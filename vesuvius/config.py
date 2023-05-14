@@ -1,28 +1,28 @@
-import multiprocessing as mp
-import warnings
-import importlib
-import os
+from importlib import import_module
 import json
+import multiprocessing as mp
+import os
+import warnings
+from dataclasses import dataclass, field, asdict
+from typing import Union, Optional, Callable, List, Tuple, Any, Type, Dict
 
 from torch.nn import Module
-import torchvision.transforms as transforms
-from dataclasses import dataclass, field, asdict, InitVar
-from typing import Union, Optional, Callable, List, Tuple, Any, Type, Dict, Protocol
 
-from vesuvius.sampler import BaseCropBox, CropBoxRegular
-from vesuvius.fragment_dataset import BaseDataset
 from vesuvius.ann import optimisers
 from vesuvius.ann.models import HybridModel
 from vesuvius.ann.transforms import *
+from vesuvius.fragment_dataset import BaseDataset
+from vesuvius.sampler import BaseCropBox
 
 
 @dataclass
 class ConfigurationModel:
-    model: Module = HybridModel()
+    model: Module = None
     learning_rate: float = 0.03
     l1_lambda: float = 0
     criterion: Module = None
     optimizer_scheduler_cls: Type[optimisers.OptimiserScheduler] = optimisers.SGDOneCycleLR
+
     optimizer_scheduler: optimisers.OptimiserScheduler = field(init=False)
     _total_loops: int = field(init=False, default=0)
 
@@ -43,24 +43,25 @@ class ConfigurationModel:
         self.optimizer_scheduler = self.optimizer_scheduler_cls(self.model, self.learning_rate, self.total_loops)
 
     @classmethod
-    def from_dict(cls, data: Dict[str, Any], config_path: Optional[str] = None) -> "ConfigurationModel":
-        unexpected_keys = ['optimizer_scheduler', 'optimizer_scheduler_cls', '_total_loops']
-        for key in unexpected_keys:
-            data.pop(key, None)
+    def from_dict(cls, config_dict: Dict[str, Any], model_path: Optional[str] = None) -> "ConfigurationModel":
+        unwanted_keys = ['optimizer_scheduler', '_total_loops']
+        for key in unwanted_keys:
+            config_dict.pop(key, None)
 
-        # Import the class and create an instance
-        model_data = data["model"]
-        model_class = importlib.import_module("vesuvius.ann.models").__getattribute__(model_data["class"])
-        model_instance = model_class(**model_data["params"])
-        data["model"] = model_instance
+        # Import the classes and create an instances
 
-        # Load state dict from .pt file if it exists
-        if config_path:
-            model_weights_path = os.path.join(os.path.dirname(config_path), "model0.pt")
-            if os.path.exists(model_weights_path):
-                model_instance.load_state_dict(torch.load(model_weights_path))
+        model_config_dict = config_dict["model"]
+        model_class = import_module("vesuvius.ann.models").__getattribute__(model_config_dict["class"])
+        model_inst = model_class(**model_config_dict["params"])
+        config_dict["model"] = model_inst
 
-        return cls(**data)
+        opt_inst = import_module('vesuvius.ann.optimisers').__getattribute__(config_dict['optimizer_scheduler_cls'])
+        config_dict['optimizer_scheduler_cls'] = opt_inst
+
+        if os.path.exists(model_path):
+            model_inst.load_state_dict(torch.load(model_path))
+
+        return cls(**config_dict)
 
 
 xl, yl = 2048, 7168  # lower left corner of the test box
@@ -70,7 +71,7 @@ width, height = 2045, 2048
 @dataclass
 class Configuration:
     info: str = ""
-    total_steps_max: int = 10_000
+    samples_max: int = 10_000
     volume_dataset_cls: Optional[Type[BaseDataset]] = None
     crop_box_cls: Optional[Type[BaseCropBox]] = None
     label_fn: Callable[..., Any] = None
@@ -153,12 +154,12 @@ class Configuration:
 
     def update_configuration_model(self):
         total_steps = self.get_total_steps()
-        if self.model0 is not None:
-            self.model0.total_loops = total_steps
-            self.model0.update_optimizer_scheduler()
-        if self.model1 is not None:
-            self.model1.total_loops = total_steps
-            self.model1.update_optimizer_scheduler()
+        for m in (self.model0, self.model1):
+            try:
+                setattr(m, 'total_loops', total_steps)
+                getattr(m, 'update_optimizer_scheduler')()
+            except AttributeError:
+                pass
 
     def get_total_steps(self):
         return self._loops_per_epoch * self._epochs
@@ -201,30 +202,32 @@ class Configuration:
         # Load config.json from the config_dir
         config_path = os.path.join(config_dir, "config.json")
         with open(config_path) as json_file:
-            data = json.load(json_file)
+            config_dict = json.load(json_file)
+
+        # Remove unwanted items
+        config_dict.pop('_loops_per_epoch', None)
+        config_dict.pop('_epochs', None)
 
         # Deserialize objects from the dictionary
-        for key, value in data.items():
+        for key, value in config_dict.items():
             if isinstance(value, dict) and "class" in value and "params" in value:
                 class_name = value["class"]
                 params = value["params"]
-                data[key] = cls.deserialize(class_name, params)
+                config_dict[key] = cls.deserialize(class_name, params)
             elif isinstance(value, str) and value.startswith("Compose(["):
                 transform_strs = value[9:-2].split(", ")
-                data[key] = transforms.Compose([cls.deserialize(transform_str) for transform_str in transform_strs])
+                config_dict[key] = transforms.Compose(
+                    [cls.deserialize(transform_str) for transform_str in transform_strs])
 
         # Deserialize ConfigurationModel objects for model0 and model1
-        if "model0" in data:
-            data["model0"] = ConfigurationModel.from_dict(data["model0"], os.path.join(config_dir, "model0.pt"))
-        if "model1" in data:
-            data["model1"] = ConfigurationModel.from_dict(data["model1"], os.path.join(config_dir, "model1.pt"))
+        if config_dict['model0']['model']:
+            config_dict["model0"] = ConfigurationModel.from_dict(config_dict["model0"],
+                                                                 os.path.join(config_dir, "model0.pt"))
+        if config_dict['model1']['model']:
+            config_dict["model1"] = ConfigurationModel.from_dict(config_dict["model1"],
+                                                                 os.path.join(config_dir, "model1.pt"))
 
-        # Remove _loops_per_epoch and _epochs from the data dictionary
-        data.pop('_loops_per_epoch', None)
-        data.pop('_epochs', None)
-
-        # Create Configuration object from deserialized dictionary
-        return cls(**data)
+        return cls(**config_dict)
 
     @staticmethod
     def deserialize(class_name: str, params: Optional[Dict[str, Any]] = None) -> Any:
@@ -236,7 +239,6 @@ class Configuration:
             raise ValueError(f"Class {class_name} not found in the current module")
 
         if issubclass(cls, ConfigurationModel):
-            return cls.from_dict(params)  # Add this line
+            return cls.from_dict(params)
         else:
             return cls(**params)
-

@@ -43,6 +43,7 @@ class JointTrainer(BaseTrainer):
         self.labels_collected = None
         self.train_loader_iter = None
         self.last_model = self.config.model1
+        self.batch_size = self.config.batch_size
 
         self.get_train_test_loaders()
 
@@ -82,7 +83,7 @@ class JointTrainer(BaseTrainer):
 
     def reshape_output0(self, output0, accumulation_steps):
         length = 65 // self.config.box_sub_width_z
-        return output0.view(accumulation_steps * self.config.batch_size, length, 1)
+        return output0.view(accumulation_steps * self.batch_size, length, 1)
 
     def forward2(self) -> 'JointTrainer':
         self.model1.train()
@@ -127,19 +128,17 @@ class JointTrainer(BaseTrainer):
         return self
 
     def get_train_test_loaders(self) -> None:
-        self.batch_size = round(self.config.batch_size / ((65 - self.config.stride_z) / self.config.stride_z + 1))
-
         dataloader_train = DataLoader(self.train_dataset,
                                       batch_size=self.batch_size,
                                       num_workers=self.config.num_workers,
                                       drop_last=True,
                                       pin_memory=True)
 
-        self.total_loops = min(len(dataloader_train), config.total_steps_max) * config.epochs
-        config.loops_per_epoch = min(len(dataloader_train), config.total_steps_max)
+        self.total_loops = min(len(dataloader_train), config.samples_max) * config.epochs
+        config.loops_per_epoch = min(len(dataloader_train), config.samples_max)
         self.total_loops = config.loops_per_epoch * config.epochs
         self.train_loader_iter = chain.from_iterable(repeat(dataloader_train, config.epochs))
-        self.train_loader_iter = islice(self.train_loader_iter, config.total_steps_max)
+        self.train_loader_iter = islice(self.train_loader_iter, config.samples_max)
 
         self.config_test = copy.copy(self.config)
         self.config_test.transformers = None
@@ -150,7 +149,7 @@ class JointTrainer(BaseTrainer):
                                  pin_memory=True)
 
         iterations = self.config.validation_steps
-        iterations = round(self.config.batch_size * (iterations / self.config.batch_size))
+        iterations = round(self.batch_size * (iterations / self.batch_size))
 
         self.test_loader_iter = iter(test_loader)
         self.test_loader_iter = list(islice(self.test_loader_iter, iterations))
@@ -181,17 +180,21 @@ if __name__ == '__main__':
         print('Failed to get public tensorboard URL')
 
     EPOCHS = 1
-    TOTAL_STEPS = 10_000_000
+    TOTAL_STEPS = 1_000_000
     SAVE_INTERVAL_MINUTES = 30
     VALIDATE_INTERVAL = 50
     LOG_INTERVAL = 10
-    PRETRAINED_MODEL0 = False
+
+    PRETRAINED_MODEL0 = True
+    PRETRAINED_REQUIRES_GRAD = False
 
     save_interval_seconds = SAVE_INTERVAL_MINUTES * 60
 
     if PRETRAINED_MODEL0:
         config0 = Configuration.from_dict('configs/trainXYZ/')
-        config_model0 = config0.model0.model
+        config_model0 = config0.model0
+        for param in config_model0.model.parameters():
+            param.requires_grad = PRETRAINED_REQUIRES_GRAD
     else:
         config_model0 = ConfigurationModel(
             model=models.HybridModel(dropout_rate=0.3, width_multiplier=1),
@@ -199,11 +202,11 @@ if __name__ == '__main__':
 
     config_model1 = ConfigurationModel(
         model=models.SimpleBinaryClassifier(0.5),
-        learning_rate=config_model0.learning_rate,
+        learning_rate=0.03,
         criterion=BCEWithLogitsLoss())
 
     config = Configuration(
-        total_steps_max=TOTAL_STEPS,
+        samples_max=TOTAL_STEPS,
         epochs=EPOCHS,
         volume_dataset_cls=SampleXYZ,
         crop_box_cls=CropBoxRegular,
@@ -213,7 +216,7 @@ if __name__ == '__main__':
         shuffle=False,
         group_pixels=True,
         balance_ink=True,
-        batch_size=4,
+        batch_size=5,
         box_width_z=65,
         box_sub_width_z=5,
         stride_xy=91,

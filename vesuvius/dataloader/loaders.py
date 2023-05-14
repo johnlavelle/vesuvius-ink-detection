@@ -69,7 +69,7 @@ def cached_data_loader(cfg: Configuration, reset_cache: bool = False, test_data=
 
         # Save the output of the data loader to a zarr file
 
-        total = cfg.total_steps_max // cfg.batch_size
+        total = cfg.samples_max // cfg.batch_size
         running_sample_len = 0
         datapoint: Datapoint
         for i, datapoint in tqdm(enumerate(train_loader),
