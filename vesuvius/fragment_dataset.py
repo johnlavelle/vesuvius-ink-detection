@@ -180,13 +180,13 @@ class CachedDataset(Dataset):
 
             np.random.shuffle(index_set_reduced)
             self.hash_mappings = {i: v for i, v in enumerate(index_set_reduced)}
-            self.length = len(index_set_reduced) - 2
+            self.length = len(index_set_reduced)
             self.ds_grp = self.ds.groupby('fxy_idx')
         else:
             self.hash_mappings = None
 
             self.ds_grp = self.ds.groupby(self.ds.sample // group_size)
-            self.length = len(self.ds_grp) - 2
+            self.length = len(self.ds_grp)
 
     def idx_mapping(self, index: int) -> int:
         if self.hash_mappings:
@@ -195,12 +195,10 @@ class CachedDataset(Dataset):
             return index
 
     def __getitem__(self, index: int) -> DatapointTuple:
-        try:
-            ds = self.ds_grp[self.idx_mapping(index)]
-        except KeyError:
-            print(f'Index {index} not found in dataset')
-            raise IndexError
+        if index >= self.__len__():
+            raise IndexError("Dataset exhausted")
 
+        ds = self.ds_grp[self.idx_mapping(index)]
         dp = Datapoint(ds['voxels'],
                        ds['label'],
                        ds['fragment'],

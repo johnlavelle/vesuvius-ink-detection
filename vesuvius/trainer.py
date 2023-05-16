@@ -56,6 +56,15 @@ class BaseTrainer(ABC):
 
         return model_, optimizer, scheduler, criterion
 
+    def get_train_loader_iter(self):
+        self.config.loops_per_epoch = min(len(self.train_dataset), self.config.samples_max)
+        self.total_loops = self.config.epochs * self.config.loops_per_epoch
+        self.train_loader_iter = chain.from_iterable(repeat(self.train_dataset, self.config.epochs))
+        return islice(self.train_loader_iter, self.total_loops)
+
+    def get_test_loader_iter(self) -> Iterable:
+        return list(islice(self.test_dataset, self.config.validation_steps))
+
     @abstractmethod
     def forward(self) -> torch.Tensor:
         ...
@@ -97,15 +106,6 @@ class BaseTrainer(ABC):
             data = json.load(file)
         config_json = json.dumps(data, indent=4)
         self.trackers.writer.add_text('config', config_json)
-
-    def get_train_loader_iter(self):
-        self.config.loops_per_epoch = min(len(self.train_dataset), self.config.samples_max)
-        self.total_loops = self.config.epochs * self.config.loops_per_epoch
-        self.train_loader_iter = chain.from_iterable(repeat(self.train_dataset, self.config.epochs))
-        return islice(self.train_loader_iter, self.total_loops)
-
-    def get_test_loader_iter(self) -> Iterable:
-        return list(islice(self.test_dataset, self.config.validation_steps))
 
     @abstractmethod
     def save_model(self):

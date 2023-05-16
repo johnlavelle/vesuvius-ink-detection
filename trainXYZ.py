@@ -1,4 +1,5 @@
 import pprint
+import copy
 
 import dask
 import torch
@@ -31,6 +32,7 @@ class TrainerXYZ(BaseTrainer):
         self.model0, self.optimizer0, self.scheduler0, self.criterion0 = self.setup_model(self.last_model)
 
     def _apply_forward(self, datapoint) -> torch.Tensor:
+        # Rescale z to be between 0 and 1
         scalar = (datapoint.z_start / (65 - self.config.box_width_z)).view(-1, 1).float()
         return self.model0(datapoint.voxels.to(self.device), scalar.to(self.device))
 
@@ -85,19 +87,19 @@ if __name__ == '__main__':
     dask.config.set(scheduler='synchronous')
     # print('Tensorboard URL: ', tensorboard_access.get_public_url(), '\n')
 
-    EPOCHS = 1
+    EPOCHS = 100
     SAVE_INTERVAL = 1_000_000
     VALIDATE_INTERVAL = 1000
     LOG_INTERVAL = 100
 
     config_model0 = ConfigurationModel(
-        model=models.HybridBinaryClassifier(),
+        model=models.HybridBinaryClassifier(dropout_rate=0.1),
         criterion=FocalLoss(),
         learning_rate=0.03)
 
     config = Configuration(
         epochs=EPOCHS,
-        samples_max=1000,
+        samples_max=160_000,
         volume_dataset_cls=SampleXYZ,
         crop_box_cls=CropBoxSobol,
         suffix_cache='sobol',
@@ -126,6 +128,9 @@ if __name__ == '__main__':
     ]:
 
         train_dataset = get_train_dataset(config, cached=True, reset_cache=False)
+
+        config_val = copy.copy(config)
+        config_val.transformers = None
         test_dataset = get_test_loader(config)
 
         criterion = FocalLoss(alpha=alpha, gamma=gamma)
