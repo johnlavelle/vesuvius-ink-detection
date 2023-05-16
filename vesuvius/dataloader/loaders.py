@@ -146,7 +146,7 @@ def get_test_loader(cfg: Configuration) -> DataLoader:
     return DataLoader(test_dataset, batch_size=cfg.batch_size, shuffle=False, num_workers=cfg.num_workers)
 
 
-def get_dataset_regular_z(cfg: dataclass, force_cache_reset, test_data=False) -> DataLoader:
+def get_dataset_regular_z(cfg: dataclass, force_cache_reset, test_data=False) -> Dataset:
     def collate_catch_errs(batch):
         filtered_batch = []
         for item in batch:

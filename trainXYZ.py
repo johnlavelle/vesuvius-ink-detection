@@ -1,11 +1,8 @@
 import pprint
-from itertools import repeat, chain, islice
 
 import dask
 import torch
-from torch.nn import BCEWithLogitsLoss
 
-from src import tensorboard_access
 from vesuvius import ann
 from vesuvius.ann import models
 from vesuvius.ann.criterions import FocalLoss
@@ -19,11 +16,6 @@ from vesuvius.trainer import BaseTrainer
 from vesuvius.trainer import centre_pixel
 from vesuvius.utils import timer
 
-# If READ_EXISTING_CONFIG is False, config is specified in Configuration (below)
-# else config is read from CONFIG_PATH.
-READ_CONFIG_FILE = False
-CONFIG_PATH = 'configs/config.json'
-
 pp = pprint.PrettyPrinter(indent=4)
 dask.config.set(scheduler='synchronous')
 
@@ -35,8 +27,6 @@ class TrainerXYZ(BaseTrainer):
         self.outputs = None
         self.loss_value = None
 
-        self.get_train_test_loaders()
-
         self.last_model = self.config.model0
         self.model0, self.optimizer0, self.scheduler0, self.criterion0 = self.setup_model(self.last_model)
 
@@ -47,7 +37,7 @@ class TrainerXYZ(BaseTrainer):
     def validate(self) -> 'TrainerXYZ':
         self.model0.eval()
         with torch.no_grad():
-            for datapoint_test in self.test_loader_iter(self.config.validation_steps):
+            for datapoint_test in self.test_loader_iter:
                 outputs = self._apply_forward(datapoint_test)
                 val_loss = self.criterion0(outputs, datapoint_test.label.float().to(self.device))
                 batch_size = len(datapoint_test.label)
@@ -82,13 +72,6 @@ class TrainerXYZ(BaseTrainer):
         self.scheduler0.step()
         return self
 
-    def get_train_test_loaders(self) -> None:
-        self.test_loader_iter = lambda length: islice(self.test_dataset, length)
-        config.loops_per_epoch = min(len(self.train_dataset), config.samples_max)
-        self.train_loader_iter = chain.from_iterable(repeat(self.train_dataset, config.epochs))
-        self.train_loader_iter = islice(self.train_loader_iter, self.config.samples_max)
-        self.total_loops = config.epochs * config.loops_per_epoch
-
     def save_model(self):
         self._save_model(self.model0, suffix='0')
 
@@ -104,11 +87,11 @@ if __name__ == '__main__':
 
     EPOCHS = 1
     SAVE_INTERVAL = 1_000_000
-    VALIDATE_INTERVAL = 500
+    VALIDATE_INTERVAL = 1000
     LOG_INTERVAL = 100
 
     config_model0 = ConfigurationModel(
-        model=models.HybridModel(),
+        model=models.HybridBinaryClassifier(),
         criterion=FocalLoss(),
         learning_rate=0.03)
 
@@ -123,8 +106,9 @@ if __name__ == '__main__':
         shuffle=True,
         group_pixels=False,
         balance_ink=True,
+        box_width_z=5,
         batch_size=32,
-        num_workers=0,
+        num_workers=10,
         model0=config_model0)
 
     print(config)
@@ -135,11 +119,11 @@ if __name__ == '__main__':
     #     reset_cache_epoch_interval=RESET_CACHE_EPOCH_INTERVAL)
 
     for alpha, gamma in [
-        # (1, 0),
         (0.25, 2),
         # (0.5, 2),
-        # (0.75, 2)
-      ]:
+        # (0.75, 2),
+        # (1, 0)
+    ]:
 
         train_dataset = get_train_dataset(config, cached=True, reset_cache=False)
         test_dataset = get_test_loader(config)

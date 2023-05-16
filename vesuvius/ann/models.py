@@ -44,7 +44,7 @@ def cnn1_sequential():
         nn.Sigmoid())
 
 
-class HybridModel(nn.Module):
+class HybridBinaryClassifier(nn.Module):
     def __init__(self, dropout_rate: float = 0.3, width_multiplier: int = 4):
         super().__init__()
         self.dropout_rate = dropout_rate
@@ -113,6 +113,15 @@ class HybridModel(nn.Module):
 
         return self.sigmoid(x)
 
+    @property
+    def requires_grad(self):
+        return all(param.requires_grad for param in self.parameters())
+
+    @requires_grad.setter
+    def requires_grad(self, value: bool):
+        for param in self.parameters():
+            param.requires_grad = value
+
     def as_dict(self):
         return {
             'dropout_rate': self.dropout_rate,
@@ -149,21 +158,18 @@ class BinaryClassifier(nn.Module):
 
 
 class SimpleBinaryClassifier(nn.Module):
-    def __init__(self, dropout_rate=0.0):
+    def __init__(self, input_size, dropout_rate=0.0):
         super().__init__()
+        self.input_size = input_size
         self.dropout_rate = dropout_rate
-        self.fc1 = None
+        self.fc1 = nn.Linear(input_size, 32)
         self.relu = nn.ReLU()
-        self.dropout = nn.Dropout(self.dropout_rate)
+        self.dropout = nn.Dropout(dropout_rate)
         self.fc2 = nn.Linear(32, 1)
         self.sigmoid = nn.Sigmoid()
 
     def forward(self, x):
         x = torch.flatten(x, start_dim=1)
-        input_size = x.shape[1]
-        if self.fc1 is None:
-            self.fc1 = nn.Linear(input_size, 32)
-            self.fc1.to(x.device)
         x = self.fc1(x)
         x = self.relu(x)
         x = self.dropout(x)
@@ -173,5 +179,23 @@ class SimpleBinaryClassifier(nn.Module):
 
     def as_dict(self):
         return {
+            'input_size':  self.input_size,
             'dropout_rate': self.dropout_rate
         }
+
+
+class StackingClassifier(nn.Module):
+    def __init__(self, input_size):
+        super(StackingClassifier, self).__init__()
+        self.fc1 = nn.Linear(input_size, 32)
+        self.fc2 = nn.Linear(32, 16)
+        self.fc3 = nn.Linear(16, 1)
+
+    def forward(self, x):
+        x = self.fc1(x)
+        x = torch.relu(x)
+        x = self.fc2(x)
+        x = torch.relu(x)
+        x = self.fc3(x)
+        x = torch.sigmoid(x)
+        return x

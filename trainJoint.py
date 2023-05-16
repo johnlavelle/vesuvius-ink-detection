@@ -1,7 +1,7 @@
 import copy
-import pprint
 import time
 from itertools import repeat, chain, islice
+from typing import Tuple
 
 import dask
 import torch
@@ -21,14 +21,6 @@ from vesuvius.trackers import Track
 from vesuvius.trainer import BaseTrainer, centre_pixel
 from vesuvius.utils import timer, pretty_print_dataclass
 
-# If READ_EXISTING_CONFIG is False, config is specified in Configuration (below)
-# else config is read from CONFIG_PATH.
-READ_CONFIG_FILE = False
-CONFIG_PATH = 'configs/config.json'
-
-pp = pprint.PrettyPrinter(indent=4, sort_dicts=True)
-dask.config.set(scheduler='synchronous')
-
 
 class JointTrainer(BaseTrainer):
     def __init__(self, *args, **kwargs):
@@ -41,53 +33,53 @@ class JointTrainer(BaseTrainer):
         self.labels = None
         self.outputs_collected = None
         self.labels_collected = None
-        self.train_loader_iter = None
         self.last_model = self.config.model1
         self.batch_size = self.config.batch_size
-
-        self.get_train_test_loaders()
+        self.input1_length = config.box_width_z // config.box_sub_width_z
 
         pretty_print_dataclass(config)
 
         self.model0, self.optimizer0, self.scheduler0, self.criterion0 = self.setup_model(self.config.model0)
         self.model1, self.optimizer1, self.scheduler1, self.criterion1 = self.setup_model(self.config.model1)
 
-    def _apply_forward(self, datapoint) -> torch.Tensor:
+    def _apply_forward(self, datapoint) -> Tuple[torch.Tensor, torch.Tensor]:
         voxels = datapoint.voxels
-        # dim0, dim1 = voxels.shape[:2]
-        # voxels = voxels.reshape(dim0 * dim1, *voxels.shape[2:])
         scalar = datapoint.label
-        return self.model0(voxels.to(self.device), scalar.to(self.device))
+        return scalar, self.model0(voxels.to(self.device), scalar.to(self.device))
+
+    @staticmethod
+    def _assert_all_values_are_one_or_zero(arr:  torch.Tensor):
+        assert torch.all(torch.logical_or(arr == 0.0, arr == 1.0)), "Not all values are 1.0 or 0.0"
 
     def forward(self) -> 'JointTrainer':
         self.optimizer0.zero_grad()
         self.optimizer1.zero_grad()
 
         self.model0.train()
-        self.outputs_collected = []
-        self.labels_collected = []
+        self.outputs_collected, self.labels_collected = [], []
         for s in range(config.accumulation_steps):
             if s != 0:
                 self.__next__()
-            output = self._apply_forward(self.datapoint)
-            self.outputs_collected.append(output.reshape(self.datapoint.label.shape[:2]))
-            self.labels_collected.append(self.datapoint.label.float().mean(dim=1))
+            label, output = self._apply_forward(self.datapoint)
+            output, label = self.reshape_output0(output),  self.reshape_output0(label)
+            self.outputs_collected.append(output)
+            self.labels_collected.append(label)
 
         self.output0 = torch.cat(self.outputs_collected, dim=0)
-        self.output0 = self.reshape_output0(self.output0, config.accumulation_steps)
-
         self.labels = torch.cat(self.labels_collected, dim=0)
-        self.labels = self.reshape_output0(self.labels, config.accumulation_steps).mean(dim=1)
-        self.labels = self.labels.to(self.device)
+
+        self.labels = self.labels.mean(dim=1).to(self.device)
+        self._assert_all_values_are_one_or_zero(self.labels)
+
+        self.labels = self.labels.unsqueeze_(1)
         return self
 
-    def reshape_output0(self, output0, accumulation_steps):
-        length = 65 // self.config.box_sub_width_z
-        return output0.view(accumulation_steps * self.batch_size, length, 1)
+    def reshape_output0(self, arr: torch.Tensor):
+        return arr.reshape([-1, self.input1_length])
 
     def forward2(self) -> 'JointTrainer':
         self.model1.train()
-        self.output1 = self.model1(self.output0)
+        self.output1 = self.model1(self.output0.squeeze())
         return self
 
     def loss(self) -> 'JointTrainer':
@@ -115,44 +107,20 @@ class JointTrainer(BaseTrainer):
         with torch.no_grad():
             for datapoint_test in self.test_loader_iter:
                 datapoint_test = self.reshape_datapoint(datapoint_test)
-                output0 = self._apply_forward(datapoint_test)
-                output0 = self.reshape_output0(output0, 1)
+                labels, output0 = self._apply_forward(datapoint_test)
+
+                output0 = self.reshape_output0(output0).squeeze()
                 output1 = self.model1(output0)
+
                 labels = self.reshape_output0(datapoint_test.label, 1).mean(dim=1)
                 labels = labels.to(self.device)
+
                 val_loss = self.criterion1(output1, labels)
                 self.trackers.update_test(val_loss.item(), len(labels))
             self.trackers.update_lr(self.scheduler1.get_last_lr()[0])
         self.model0.train()
         self.model1.train()
         return self
-
-    def get_train_test_loaders(self) -> None:
-        dataloader_train = DataLoader(self.train_dataset,
-                                      batch_size=self.batch_size,
-                                      num_workers=self.config.num_workers,
-                                      drop_last=True,
-                                      pin_memory=True)
-
-        self.total_loops = min(len(dataloader_train), config.samples_max) * config.epochs
-        config.loops_per_epoch = min(len(dataloader_train), config.samples_max)
-        self.total_loops = config.loops_per_epoch * config.epochs
-        self.train_loader_iter = chain.from_iterable(repeat(dataloader_train, config.epochs))
-        self.train_loader_iter = islice(self.train_loader_iter, config.samples_max)
-
-        self.config_test = copy.copy(self.config)
-        self.config_test.transformers = None
-        test_loader = DataLoader(self.train_dataset,
-                                 batch_size=self.batch_size,
-                                 num_workers=self.config.num_workers,
-                                 drop_last=True,
-                                 pin_memory=True)
-
-        iterations = self.config.validation_steps
-        iterations = round(self.batch_size * (iterations / self.batch_size))
-
-        self.test_loader_iter = iter(test_loader)
-        self.test_loader_iter = list(islice(self.test_loader_iter, iterations))
 
     def save_model(self):
         self._save_model(self.model0, suffix='0')
@@ -162,7 +130,7 @@ class JointTrainer(BaseTrainer):
         bsw = config.box_sub_width_z
         kwargs = {k: v.repeat_interleave(65 // bsw, dim=0) for k, v in datapoint._asdict().items() if
                   k != 'voxels'}
-        kwargs['label'] = kwargs['label'].squeeze(1).float()
+        kwargs['label'] = kwargs['label'].float()
         kwargs['voxels'] = self.datapoint.voxels.reshape(self.batch_size * 65 // bsw, 1, bsw, 91, 91)
         return DatapointTuple(**kwargs)
 
@@ -172,6 +140,8 @@ class JointTrainer(BaseTrainer):
 
 
 if __name__ == '__main__':
+    dask.config.set(scheduler='synchronous')
+
     start_time = time.time()
 
     try:
@@ -182,28 +152,29 @@ if __name__ == '__main__':
     EPOCHS = 1
     TOTAL_STEPS = 1_000_000
     SAVE_INTERVAL_MINUTES = 30
-    VALIDATE_INTERVAL = 50
+    VALIDATE_INTERVAL = 10
     LOG_INTERVAL = 10
-
-    PRETRAINED_MODEL0 = True
-    PRETRAINED_REQUIRES_GRAD = False
+    PRETRAINED_MODEL0 = False
+    BOX_SUB_WIDTH_Z = 5
 
     save_interval_seconds = SAVE_INTERVAL_MINUTES * 60
 
     if PRETRAINED_MODEL0:
         config0 = Configuration.from_dict('configs/trainXYZ/')
+        assert config0.box_width_z == BOX_SUB_WIDTH_Z
         config_model0 = config0.model0
-        for param in config_model0.model.parameters():
-            param.requires_grad = PRETRAINED_REQUIRES_GRAD
+        config_model0.model.requires_grad = False
     else:
         config_model0 = ConfigurationModel(
-            model=models.HybridModel(dropout_rate=0.3, width_multiplier=1),
-            learning_rate=0.03)
+            model=models.HybridBinaryClassifier(dropout_rate=0.3, width_multiplier=1),
+            learning_rate=0.03
+        )
 
     config_model1 = ConfigurationModel(
-        model=models.SimpleBinaryClassifier(0.5),
+        model=models.StackingClassifier(13),
         learning_rate=0.03,
-        criterion=BCEWithLogitsLoss())
+        criterion=BCEWithLogitsLoss()
+    )
 
     config = Configuration(
         samples_max=TOTAL_STEPS,
@@ -214,21 +185,30 @@ if __name__ == '__main__':
         label_fn=centre_pixel,
         transformers=ann.transforms.transform1,
         shuffle=False,
-        group_pixels=True,
+        group_pixels=False,
         balance_ink=True,
-        batch_size=5,
+        batch_size=4,
         box_width_z=65,
-        box_sub_width_z=5,
+        box_sub_width_z=BOX_SUB_WIDTH_Z,
         stride_xy=91,
         stride_z=65,
-        num_workers=4,
+        num_workers=8,
         validation_steps=100,
         accumulation_steps=8,
         model0=config_model0,
-        model1=config_model1)
+        model1=config_model1
+    )
 
     train_dataset = get_dataset_regular_z(config, False, test_data=False)
-    test_dataset = get_dataset_regular_z(config, False, test_data=True)
+    dataloader_train = DataLoader(train_dataset,
+                                  batch_size=config.batch_size,
+                                  num_workers=config.num_workers,
+                                  drop_last=True,
+                                  pin_memory=True)
+
+    config_val = copy.copy(config)
+    config_val.transformers = None
+    test_dataset = get_dataset_regular_z(config_val, False, test_data=True)
 
     with Track() as track, timer("Training"):
         trainer = JointTrainer(train_dataset, test_dataset, track, config)

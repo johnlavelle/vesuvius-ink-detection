@@ -1,6 +1,8 @@
 import json
 from abc import ABC, abstractmethod
-from typing import Generator, Any, Type, Tuple
+from typing import Generator, Any, Type, Tuple, Iterable
+from itertools import repeat, chain, islice
+from torch.utils.data import DataLoader
 
 import numpy as np
 import torch
@@ -31,13 +33,14 @@ class BaseTrainer(ABC):
         self.trackers = trackers
         self.datapoint = self.output0 = None
 
-        self.train_loader_iter = None
-        self.test_loader_iter = None
         self.model0 = None
         self.batch_size = None
         self.total_loops = None
         self.os = None
         self.optimizer0, self.scheduler0, self.criterion0 = None, None, None
+
+        self.train_loader_iter = self.get_train_loader_iter()
+        self.test_loader_iter = self.get_test_loader_iter()
 
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
         print(f'Using device: {self.device}', '\n')
@@ -52,11 +55,6 @@ class BaseTrainer(ABC):
             print('Using DataParallel for training.')
 
         return model_, optimizer, scheduler, criterion
-
-    @abstractmethod
-    def get_train_test_loaders(self) -> None:
-        self.train_loader_iter = None
-        self.test_loader_iter = None
 
     @abstractmethod
     def forward(self) -> torch.Tensor:
@@ -99,6 +97,15 @@ class BaseTrainer(ABC):
             data = json.load(file)
         config_json = json.dumps(data, indent=4)
         self.trackers.writer.add_text('config', config_json)
+
+    def get_train_loader_iter(self):
+        self.config.loops_per_epoch = min(len(self.train_dataset), self.config.samples_max)
+        self.total_loops = self.config.epochs * self.config.loops_per_epoch
+        self.train_loader_iter = chain.from_iterable(repeat(self.train_dataset, self.config.epochs))
+        return islice(self.train_loader_iter, self.total_loops)
+
+    def get_test_loader_iter(self) -> Iterable:
+        return list(islice(self.test_dataset, self.config.validation_steps))
 
     @abstractmethod
     def save_model(self):

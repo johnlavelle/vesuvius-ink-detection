@@ -180,13 +180,13 @@ class CachedDataset(Dataset):
 
             np.random.shuffle(index_set_reduced)
             self.hash_mappings = {i: v for i, v in enumerate(index_set_reduced)}
-            self.length = len(index_set_reduced)
+            self.length = len(index_set_reduced) - 2
             self.ds_grp = self.ds.groupby('fxy_idx')
         else:
             self.hash_mappings = None
 
             self.ds_grp = self.ds.groupby(self.ds.sample // group_size)
-            self.length = len(self.ds_grp)
+            self.length = len(self.ds_grp) - 2
 
     def idx_mapping(self, index: int) -> int:
         if self.hash_mappings:
