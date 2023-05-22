@@ -87,7 +87,6 @@ class Configuration:
     stride_z: Optional[int] = None
     balance_ink: bool = True
     shuffle: bool = True
-    group_pixels: bool = False
     validation_steps: int = 100
     num_workers: int = max(1, mp.cpu_count() - 1)
     prefix: str = "/data/kaggle/input/vesuvius-challenge-ink-detection/train/"
@@ -98,6 +97,7 @@ class Configuration:
     model1: Optional[ConfigurationModel] = field(default_factory=ConfigurationModel)
     epochs: int = 1
     accumulation_steps: int = None
+    seed: int = 648
     performance_dict: Optional[Dict[str, Any]] = None
     extra_dict: Optional[Dict[str, Any]] = None
     _loops_per_epoch: int = field(init=False, default=10_000)
@@ -111,8 +111,6 @@ class Configuration:
 
         if (self.stride_xy is not None) or (self.stride_z is not None):
             self._crop_box_has_getitem("Strides are not supported for this crop_box_cls")
-        if self.group_pixels:
-            self._crop_box_has_getitem("group_pixels == True is not supported for this crop_box_cls")
         if self.shuffle:
             try:
                 self._crop_box_has_getitem("shuffle == True is not supported for this crop_box_cls")

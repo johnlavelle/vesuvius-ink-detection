@@ -45,23 +45,23 @@ def cnn1_sequential():
 
 
 class HybridBinaryClassifier(nn.Module):
-    def __init__(self, dropout_rate: float = 0.3, width_multiplier: int = 4):
+    def __init__(self, dropout_rate: float = 0.3, width: int = 4):
         super().__init__()
         self.dropout_rate = dropout_rate
-        self.width_multiplier = width_multiplier
+        self.width = width
 
-        self.conv1 = nn.Conv3d(1, 4 * self.width_multiplier, 3, 1, 1)
-        self.bn1 = nn.BatchNorm3d(4 * self.width_multiplier)
+        self.conv1 = nn.Conv3d(1, self.width, 3, 1, 1)
+        self.bn1 = nn.BatchNorm3d(self.width)
         self.dropout1 = nn.Dropout(self.dropout_rate)
         self.pool1 = nn.MaxPool3d(2, 2)
 
-        self.conv2 = nn.Conv3d(4 * self.width_multiplier, 8 * self.width_multiplier, 3, 1, 1)
-        self.bn2 = nn.BatchNorm3d(8 * self.width_multiplier)
+        self.conv2 = nn.Conv3d(self.width, 2 * self.width, 3, 1, 1)
+        self.bn2 = nn.BatchNorm3d(2 * self.width)
         self.dropout2 = nn.Dropout(self.dropout_rate)
         self.pool2 = nn.MaxPool3d(2, 2)
 
-        self.conv3 = nn.Conv3d(8 * self.width_multiplier, 16 * self.width_multiplier, 3, 1, 1)
-        self.bn3 = nn.BatchNorm3d(16 * self.width_multiplier)
+        self.conv3 = nn.Conv3d(2 * self.width, 4 * self.width, 3, 1, 1)
+        self.bn3 = nn.BatchNorm3d(4 * self.width)
         self.dropout3 = nn.Dropout(self.dropout_rate)
         self.pool3 = nn.AdaptiveMaxPool3d((8, 8, 8))
 
@@ -73,7 +73,7 @@ class HybridBinaryClassifier(nn.Module):
         self.dropout_scalar = nn.Dropout(self.dropout_rate)
 
         # Combined layers (initialized later)
-        self.fc_combined1 = nn.Linear(16 * 8 * 8 * 8 * self.width_multiplier + 16, 128)
+        self.fc_combined1 = nn.Linear(4 * 8 * 8 * 8 * self.width + 16, 128)
         self.bn_combined = nn.BatchNorm1d(128)
         self.dropout_combined = nn.Dropout(self.dropout_rate)
 
@@ -125,7 +125,7 @@ class HybridBinaryClassifier(nn.Module):
     def as_dict(self):
         return {
             'dropout_rate': self.dropout_rate,
-            'width_multiplier': self.width_multiplier
+            'width_multiplier': self.width
         }
 
 
@@ -179,17 +179,18 @@ class SimpleBinaryClassifier(nn.Module):
 
     def as_dict(self):
         return {
-            'input_size':  self.input_size,
+            'input_size': self.input_size,
             'dropout_rate': self.dropout_rate
         }
 
 
 class StackingClassifier(nn.Module):
-    def __init__(self, input_size):
+    def __init__(self, input_size, width_multiplier=1):
         super(StackingClassifier, self).__init__()
-        self.fc1 = nn.Linear(input_size, 32)
-        self.fc2 = nn.Linear(32, 16)
-        self.fc3 = nn.Linear(16, 1)
+        self.width_multiplier = width_multiplier
+        self.fc1 = nn.Linear(input_size, 16)
+        self.fc2 = nn.Linear(16, 8)
+        self.fc3 = nn.Linear(8, 1)
 
     def forward(self, x):
         x = self.fc1(x)
@@ -199,3 +200,28 @@ class StackingClassifier(nn.Module):
         x = self.fc3(x)
         x = torch.sigmoid(x)
         return x
+
+    def as_dict(self):
+        return {
+            'width_multiplier': self.width_multiplier
+        }
+
+
+class StackingClassifierShallow(nn.Module):
+    def __init__(self, input_size: int, width_multiplier: int = 1):
+        super().__init__()
+        self.width_multiplier = width_multiplier
+        self.fc1 = nn.Linear(input_size, 16 * self.width_multiplier)
+        self.fc2 = nn.Linear(16 * self.width_multiplier, 1)
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        x = self.fc1(x)
+        x = torch.relu(x)
+        x = self.fc2(x)
+        x = torch.sigmoid(x)
+        return x
+
+    def as_dict(self):
+        return {
+            'width_multiplier': self.width_multiplier
+        }

@@ -87,6 +87,7 @@ class Track:
         self.writer = SummaryWriter(self.log_subdir, flush_secs=60)
         self.logger_loss = TrackerAvg('loss/train', self.writer)
         self.logger_test_loss = TrackerAvg('loss/test', self.writer)
+        self.logger_score = TrackerAvg('score/test', self.writer)
         self.logger_lr = TrackerAvg('stats/lr', self.writer)
 
         return self
@@ -112,6 +113,10 @@ class Track:
 
     def log_train(self):
         self.logger_loss.log(self.incrementer.count)
+
+    def log_score(self, score):
+        self.logger_score.update(score, batch_size=1)
+        self.logger_score.log(self.incrementer.count)
 
     def increment(self, batch_size=1):
         self.incrementer.increment(batch_size)

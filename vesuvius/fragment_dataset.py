@@ -2,6 +2,7 @@ from abc import ABC, abstractmethod
 from collections import Counter
 from functools import lru_cache
 from typing import Any, Callable, Type, Union
+import random
 
 import numpy as np
 import torch
@@ -157,48 +158,74 @@ class BaseDataset(ABC, Dataset):
 #         raise NotImplementedError
 
 
-def unique_values_and_counts(arr):
-    """Returns unique values and their counts from an input list, along with the highest count"""
-    counter = Counter(arr)
-    return list(zip(*counter.items())), max(counter.values())
+# def unique_values_and_counts(arr):
+#     """Returns unique values and their counts from an input list, along with the highest count"""
+#     counter = Counter(arr)
+#     return list(zip(*counter.items())), max(counter.values())
+
+
+# class CachedDataset(Dataset):
+#     def __init__(self, dataset: xr.Dataset, transformers=None, group_size=32, group_pixels=False):
+#         self.transformers = transformers
+#         self.hash_mappings = None
+#         self.ds = dataset
+#         self.group_size = group_size
+#         self.length = self.ds.dims['sample'] // group_size  # number of groups
+#         np.random.seed(0)
+#
+#         # Pre-divide the dataset into non-overlapping subsets
+#         # Exclude the remainder of the division by group_size to have evenly sized groups
+#         indices = np.arange(self.length * group_size)
+#         np.random.shuffle(indices)
+#         self.groups = np.array_split(indices, self.length)
+#         assert all(len(g) == self.group_size for g in self.groups)
+#
+#     def __getitem__(self, index: int) -> DatapointTuple:
+#         # Select the corresponding subset
+#         ds = self.ds.isel(sample=self.groups[index])
+#         dp = Datapoint(ds['voxels'],
+#                        ds['label'],
+#                        ds['fragment'],
+#                        ds['x_start'],
+#                        ds['x_stop'],
+#                        ds['y_start'],
+#                        ds['y_stop'],
+#                        ds['z_start'],
+#                        ds['z_stop']).to_namedtuple()
+#
+#         if self.transformers:
+#             dp = dp._replace(voxels=self.transformers(dp.voxels))
+#         return dp
+#
+#     def __len__(self):
+#         return self.length
 
 
 class CachedDataset(Dataset):
-    def __init__(self, dataset: xr.Dataset, transformers=None, group_size=32, group_pixels=False):
-        self.ds_grp = None
+    def __init__(self, dataset: xr.Dataset, transformers=None, group_size=32, seed=None):
         self.transformers = transformers
-        self.hash_mappings = None
+        self.group_size = group_size
         self.ds = dataset
-        self.length = None
-        self.group_by_pixel_index(group_pixels, group_size)
+        self.seed = seed
 
-    def group_by_pixel_index(self, group_pixels, group_size):
-        if group_pixels:
-            (index_set, counts), typical_count = unique_values_and_counts(self.ds.fxy_idx.values)
-            index_set, counts = np.array(index_set), np.array(counts)
-            index_set_reduced = index_set[counts == typical_count]
+        # Remove last group if length != group_size
+        self.ds = self.ds.isel(sample=slice(0, len(self.ds.sample) - len(self.ds.sample) % 4))
 
-            np.random.shuffle(index_set_reduced)
-            self.hash_mappings = {i: v for i, v in enumerate(index_set_reduced)}
-            self.length = len(index_set_reduced)
-            self.ds_grp = self.ds.groupby('fxy_idx')
-        else:
-            self.hash_mappings = None
+        groups = xr.DataArray(np.arange(len(self.ds.sample)) // group_size, dims='sample')
+        self.ds = self.ds.assign_coords(group=groups)
+        self.ds_grp = self.ds.groupby('group')
 
-            self.ds_grp = self.ds.groupby(self.ds.sample // group_size)
-            self.length = len(self.ds_grp)
+        self.indexes = list(range(len(self.ds_grp)))
+        self.shuffle()
 
-    def idx_mapping(self, index: int) -> int:
-        if self.hash_mappings:
-            return self.hash_mappings[index]
-        else:
-            return index
+    def shuffle(self):
+        random.seed(self.seed)  # Set the seed here
+        random.shuffle(self.indexes)
 
     def __getitem__(self, index: int) -> DatapointTuple:
         if index >= self.__len__():
             raise IndexError("Dataset exhausted")
-
-        ds = self.ds_grp[self.idx_mapping(index)]
+        ds = self.ds_grp[self.indexes[index]]  # Use shuffled index
         dp = Datapoint(ds['voxels'],
                        ds['label'],
                        ds['fragment'],
@@ -211,8 +238,8 @@ class CachedDataset(Dataset):
 
         if self.transformers:
             dp = dp._replace(voxels=self.transformers(dp.voxels))
-
         return dp
 
     def __len__(self):
-        return self.length
+        return len(self.ds_grp)
+

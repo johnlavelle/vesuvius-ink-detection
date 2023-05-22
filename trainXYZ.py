@@ -3,6 +3,7 @@ import copy
 
 import dask
 import torch
+from torch.utils.data import DataLoader
 
 from vesuvius import ann
 from vesuvius.ann import models
@@ -106,7 +107,6 @@ if __name__ == '__main__':
         label_fn=centre_pixel,
         transformers=ann.transforms.transform1,
         shuffle=True,
-        group_pixels=False,
         balance_ink=True,
         box_width_z=5,
         batch_size=32,
@@ -128,18 +128,24 @@ if __name__ == '__main__':
     ]:
 
         train_dataset = get_train_dataset(config, cached=True, reset_cache=False)
+        train_dataloader = DataLoader(train_dataset,
+                                      batch_size=config.batch_size,
+                                      num_workers=config.num_workers,
+                                      drop_last=True,
+                                      pin_memory=True)
 
         config_val = copy.copy(config)
         config_val.transformers = None
-        test_dataset = get_test_loader(config)
+        test_dataloader = get_test_loader(config)
 
         criterion = FocalLoss(alpha=alpha, gamma=gamma)
 
         with Track() as track, timer("Training"):
 
-            trainer = TrainerXYZ(train_dataset, test_dataset, track, config)
+            trainer = TrainerXYZ(train_dataloader, test_dataloader, track, config)
 
             for i, train in enumerate(trainer):
+                pass
                 train.forward().loss().backward().step()
 
                 if i == 0:

@@ -239,13 +239,9 @@ def open_dataset(zarr_path: str):
 def get_dataset(zarr_path: str, fragment: Union[int, str], hold_back_box: Tuple[int, int, int, int], test_data=False):
     with dask.config.set(scheduler='synchronous'):
         ds = open_dataset(zarr_path)
+        hold_back_bools = get_hold_back_bools(ds, fragment, hold_back_box)
         if test_data:
-            hold_back_bools = get_hold_back_bools(ds, fragment, hold_back_box)
             ds = ds.isel(sample=hold_back_bools)
+        else:
+            ds = ds.isel(sample=~hold_back_bools)
         return ds
-
-
-if __name__ == '__main__':
-    base_path = '/home/john/code/kaggle/vesuvius-ink-detection/configs/'
-    lm = LoadModel(join(base_path, 'trainXYZ'), join(base_path, 'trainXYZ/model0.pt'))
-    lm.config()

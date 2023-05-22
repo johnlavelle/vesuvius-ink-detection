@@ -1,0 +1,83 @@
+{
+    "info": "",
+    "samples_max": 1000000,
+    "volume_dataset_cls": "SampleXYZ",
+    "crop_box_cls": "CropBoxRegular",
+    "label_fn": "centre_pixel",
+    "transformers": "Compose([RandomFlipTransform])",
+    "batch_size": 4,
+    "fragments": [
+        1,
+        2,
+        3
+    ],
+    "test_box": [
+        2048,
+        7168,
+        4093,
+        9216
+    ],
+    "test_box_fragment": 2,
+    "box_width_xy": 91,
+    "box_width_z": 65,
+    "box_sub_width_z": 5,
+    "stride_xy": 91,
+    "stride_z": 65,
+    "balance_ink": true,
+    "shuffle": false,
+    "group_pixels": false,
+    "validation_steps": 100,
+    "num_workers": 2,
+    "prefix": "/data/kaggle/input/vesuvius-challenge-ink-detection/train/",
+    "suffix_cache": "regular",
+    "collate_fn": "collate_catch_errs",
+    "nn_dict": null,
+    "model0": {
+        "model": {
+            "class": "HybridBinaryClassifier",
+            "params": {
+                "dropout_rate": 0.1,
+                "width_multiplier": 1
+            }
+        },
+        "learning_rate": 0.03,
+        "l1_lambda": 0,
+        "criterion": null,
+        "optimizer_scheduler_cls": "SGDOneCycleLR",
+        "optimizer_scheduler": {
+            "class": "SGDOneCycleLR",
+            "params": {
+                "model": "HybridBinaryClassifier",
+                "learning_rate": 0.03,
+                "total_steps": 9450
+            }
+        },
+        "_total_loops": 9450
+    },
+    "model1": {
+        "model": "StackingClassifierShallow",
+        "learning_rate": 0.03,
+        "l1_lambda": 0,
+        "criterion": "BCEWithLogitsLoss",
+        "optimizer_scheduler_cls": "SGDOneCycleLR",
+        "optimizer_scheduler": {
+            "class": "SGDOneCycleLR",
+            "params": {
+                "model": "StackingClassifierShallow",
+                "learning_rate": 0.03,
+                "total_steps": 9450
+            }
+        },
+        "_total_loops": 9450
+    },
+    "epochs": 10,
+    "accumulation_steps": 1,
+    "performance_dict": {
+        "loss/train": 0.5275373434533879,
+        "loss/test": 0.0,
+        "steps": 37800
+    },
+    "extra_dict": null,
+    "_loops_per_epoch": 945,
+    "_epochs": 10
+}

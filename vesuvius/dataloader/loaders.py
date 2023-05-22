@@ -51,6 +51,44 @@ def standard_data_loader(cfg: Configuration, worker_init='diff') -> DataLoader:
                       collate_fn=cfg.collate_fn)
 
 
+def create_dataset(cache_dir, cfg, worker_init, zarr_dir):
+    train_loader = get_train_dataset(cfg, worker_init=worker_init)
+    saver = SaveModel(cache_dir)
+    # Save the output of the data loader to a zarr file
+    total = cfg.samples_max // cfg.batch_size
+    running_sample_len = 0
+    datapoint: Datapoint
+    for i, datapoint in tqdm(enumerate(train_loader),
+                             total=total, disable=False, desc='Caching data', position=1, leave=False):
+        if datapoint is None:
+            continue
+
+        # Create a dataset with the samples and labels
+        sub_volume_len = datapoint.voxels.shape[0]
+        sub_volume_coord = np.arange(running_sample_len, running_sample_len + sub_volume_len)
+        coords = {'sample': sub_volume_coord}
+        voxels_da = xr.DataArray(datapoint.voxels.numpy(), dims=('sample', 'empty', 'z', 'x', 'y'), coords=coords)
+        label_da = xr.DataArray(datapoint.label, dims=('sample', 'empty'), coords=coords)
+        samples_labels = {'voxels': voxels_da, 'label': label_da}
+        dp = datapoint._asdict()
+        parameters = {k: xr.DataArray(v, dims=('sample', 'empty'), coords=coords) for k, v in dp.items() if
+                      k not in samples_labels.keys()}
+        ds = xr.Dataset({**samples_labels, **parameters})
+        for k in ['fragment', 'x_start', 'x_stop', 'y_start', 'y_stop', 'z_start', 'z_stop', 'fxy_idx']:
+            ds[k] = ds[k].squeeze('empty', drop=True)
+        ds = ds.assign_coords(fragment=ds.fragment,
+                              x_start=ds.x_start,
+                              x_stop=ds.x_stop,
+                              y_start=ds.y_start,
+                              y_stop=ds.y_stop,
+                              z_start=ds.z_start,
+                              z_stop=ds.z_stop,
+                              fxy_idx=ds.fxy_idx)
+        dataset_to_zarr(ds, zarr_dir, 'sample')
+        running_sample_len += sub_volume_len
+    saver.config(cfg)
+
+
 def cached_data_loader(cfg: Configuration, reset_cache: bool = False, test_data=False, worker_init='diff') -> Dataset:
     cache_dir = os.path.join(cfg.prefix, f'data_cache_{cfg.suffix_cache}')
     zarr_dir = os.path.join(cache_dir, f'cache.zarr')
@@ -64,46 +102,10 @@ def cached_data_loader(cfg: Configuration, reset_cache: bool = False, test_data=
         except FileExistsError:
             pass
 
-        train_loader = get_train_dataset(cfg, worker_init=worker_init)
-        saver = SaveModel(cache_dir)
-
-        # Save the output of the data loader to a zarr file
-
-        total = cfg.samples_max // cfg.batch_size
-        running_sample_len = 0
-        datapoint: Datapoint
-        for i, datapoint in tqdm(enumerate(train_loader),
-                                 total=total, disable=False, desc='Caching data', position=1, leave=False):
-            if datapoint is None:
-                continue
-
-            # Create a dataset with the samples and labels
-            sub_volume_len = datapoint.voxels.shape[0]
-            sub_volume_coord = np.arange(running_sample_len, running_sample_len + sub_volume_len)
-            coords = {'sample': sub_volume_coord}
-            voxels_da = xr.DataArray(datapoint.voxels.numpy(), dims=('sample', 'empty', 'z', 'x', 'y'), coords=coords)
-            label_da = xr.DataArray(datapoint.label, dims=('sample', 'empty'), coords=coords)
-            samples_labels = {'voxels': voxels_da, 'label': label_da}
-            dp = datapoint._asdict()
-            parameters = {k: xr.DataArray(v, dims=('sample', 'empty'), coords=coords) for k, v in dp.items() if
-                          k not in samples_labels.keys()}
-            ds = xr.Dataset({**samples_labels, **parameters})
-            for k in ['fragment', 'x_start', 'x_stop', 'y_start', 'y_stop', 'z_start', 'z_stop', 'fxy_idx']:
-                ds[k] = ds[k].squeeze('empty', drop=True)
-            ds = ds.assign_coords(fragment=ds.fragment,
-                                  x_start=ds.x_start,
-                                  x_stop=ds.x_stop,
-                                  y_start=ds.y_start,
-                                  y_stop=ds.y_stop,
-                                  z_start=ds.z_start,
-                                  z_stop=ds.z_stop,
-                                  fxy_idx=ds.fxy_idx)
-            dataset_to_zarr(ds, zarr_dir, 'sample')
-            running_sample_len += sub_volume_len
-        saver.config(cfg)
+        create_dataset(cache_dir, cfg, worker_init, zarr_dir)
 
     ds = get_dataset(zarr_dir, fragment=cfg.test_box_fragment, hold_back_box=cfg.test_box, test_data=test_data)
-    return CachedDataset(ds, transformers=cfg.transformers, group_size=cfg.batch_size, group_pixels=cfg.group_pixels)
+    return CachedDataset(ds, transformers=cfg.transformers, group_size=cfg.batch_size, seed=cfg.seed)
 
 
 def get_train_dataset(cfg: Configuration,

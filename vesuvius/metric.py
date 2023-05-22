@@ -12,26 +12,32 @@ For this case, we will implement a function that calculates the Sørensen-Dice c
 which is a variant of the F1 score that puts more emphasis on precision. Here's the implementation in Python:
 """
 
+import numpy as np
+from numpy import ndarray
 
-def f0_5_score(tp, fp, fn):
-    beta = 0.5
+
+def f0_5_score(output_image: ndarray, reference_image: ndarray) -> float:
+    # Flatten the images
+    output_image = output_image.flatten()
+    reference_image = reference_image.flatten()
+
+    # Calculate true positives (tp), false positives (fp), and false negatives (fn)
+    tp = np.sum(np.logical_and(output_image == 1, reference_image == 1))
+    fp = np.sum(np.logical_and(output_image == 1, reference_image == 0))
+    fn = np.sum(np.logical_and(output_image == 0, reference_image == 1))
+
+    # If there are no true positives, return 0
+    if tp == 0:
+        return 0.0
+
+    # Calculate precision (p) and recall (r)
     p = tp / (tp + fp)
     r = tp / (tp + fn)
-    f0_5 = (1 + beta ** 2) * (p * r) / (beta ** 2 * p + r)
+
+    # Define beta
+    beta = 0.5
+
+    # Calculate F0.5 score
+    f0_5 = (1 + beta ** 2) * (p * r) / ((beta ** 2 * p) + r)
+
     return f0_5
-
-
-def sorensen_dice_coefficient(set1, set2):
-    intersection = set(set1).intersection(set(set2))
-    tp = len(intersection)
-    fp = len(set1) - tp
-    fn = len(set2) - tp
-
-    f0_5 = f0_5_score(tp, fp, fn)
-    return f0_5
-
-
-# Example usage:
-set1 = {1, 2, 3, 4, 5}
-set2 = {4, 5, 6, 7, 8}
-print(sorensen_dice_coefficient(set1, set2))

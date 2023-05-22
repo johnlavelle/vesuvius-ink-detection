@@ -66,8 +66,6 @@ class Datapoint:
             field_value = field_value.values
             field_value.setflags(write=False)
             field_value = field_value.copy()
-        if isinstance(field_value, np.ndarray) and field_value.shape == ():
-            field_value = field_value.item()
         elif isinstance(field_value, np.ndarray) and np.issubdtype(field_value.dtype, np.floating):
             field_value = field_value.astype(np.float32)
         elif isinstance(field_value, numbers.Integral):

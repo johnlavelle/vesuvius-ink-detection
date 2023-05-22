@@ -63,7 +63,7 @@ class BaseTrainer(ABC):
         return islice(self.train_loader_iter, self.total_loops)
 
     def get_test_loader_iter(self) -> Iterable:
-        return list(islice(self.test_dataset, self.config.validation_steps))
+        return list(islice(self.test_dataset, min(len(self.test_dataset), self.config.validation_steps)))
 
     @abstractmethod
     def forward(self) -> torch.Tensor:
@@ -122,7 +122,9 @@ class BaseTrainer(ABC):
     def __next__(self) -> 'BaseTrainer':
         if self.trackers.incrementer.loop >= self.total_loops:
             raise StopIteration
+        self.datapoint_old = self.datapoint
         self.datapoint = next(self.train_loader_iter)
+        # assert len(self.datapoint.fxy_idx) == self.config.batch_size
         self.trackers.increment(len(self.datapoint.label))
         return self
 
