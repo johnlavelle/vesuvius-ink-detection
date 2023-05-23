@@ -209,7 +209,7 @@ class CachedDataset(Dataset):
         self.seed = seed
 
         # Remove last group if length != group_size
-        self.ds = self.ds.isel(sample=slice(0, len(self.ds.sample) - len(self.ds.sample) % 4))
+        self.ds = self.ds.isel(sample=slice(0, len(self.ds.sample) - len(self.ds.sample) % group_size))
 
         groups = xr.DataArray(np.arange(len(self.ds.sample)) // group_size, dims='sample')
         self.ds = self.ds.assign_coords(group=groups)

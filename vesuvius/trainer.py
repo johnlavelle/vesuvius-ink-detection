@@ -122,9 +122,8 @@ class BaseTrainer(ABC):
     def __next__(self) -> 'BaseTrainer':
         if self.trackers.incrementer.loop >= self.total_loops:
             raise StopIteration
-        self.datapoint_old = self.datapoint
         self.datapoint = next(self.train_loader_iter)
-        # assert len(self.datapoint.fxy_idx) == self.config.batch_size
+        assert len(self.datapoint.fxy_idx) == self.config.batch_size
         self.trackers.increment(len(self.datapoint.label))
         return self
 

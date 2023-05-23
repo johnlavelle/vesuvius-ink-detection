@@ -43,7 +43,7 @@ class BaseTracker(ABC):
     ignore: bool = True
 
     @abstractmethod
-    def update(self, loss: float, batch_size: int) -> None:
+    def update(self, loss: float, batch_size: int = 1) -> None:
         ...
 
     @abstractmethod
@@ -54,7 +54,7 @@ class BaseTracker(ABC):
 @dataclass
 class TrackerAvg(BaseTracker):
 
-    def update(self, loss: float, batch_size: int) -> None:
+    def update(self, loss: float, batch_size: int = 1) -> None:
         self.value += loss * batch_size
         self.count += batch_size
 

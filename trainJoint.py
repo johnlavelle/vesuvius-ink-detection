@@ -1,6 +1,6 @@
 import copy
 import time
-from typing import Tuple
+from typing import Tuple, Iterable
 
 import numpy as np
 import dask
@@ -11,8 +11,7 @@ from torch.utils.data import DataLoader
 from src import tensorboard_access
 from vesuvius import ann
 from vesuvius.ann import models
-from vesuvius.config import Configuration
-from vesuvius.config import ConfigurationModel
+from vesuvius.config import Configuration, ConfigurationModel
 from vesuvius.dataloader import get_dataset_regular_z
 from vesuvius.datapoints import DatapointTuple
 from vesuvius.sample_processors import SampleXYZ
@@ -110,32 +109,35 @@ class JointTrainer(BaseTrainer):
         self.scheduler1.step()
         return self
 
-    def validate(self) -> 'JointTrainer':
+    def prediction(self, data_iter: Iterable) -> Tuple[np.ndarray, np.ndarray]:
         self.model0.eval()
         self.model1.eval()
 
         with torch.no_grad():
             labels, outputs = [], []
-            for datapoint_test in self.test_loader_iter:
-                datapoint_test = self.reshape_datapoint(datapoint_test)
-                label, output0 = self._apply_forward(datapoint_test)
+            for datapoint in data_iter:
+                datapoint = self.reshape_datapoint(datapoint)
+                label, output0 = self._apply_forward(datapoint)
                 label, output0 = self.reshape_output0(label), self.reshape_output0(output0)
                 output1 = self.model1(output0.squeeze())
                 label = label.mean(dim=1).unsqueeze(1).to(self.device)
-                val_loss = self.criterion1(output1, label)
-                self.trackers.update_test(val_loss.item(), len(label))
+                _loss = self.criterion1(output1, label)
+                self.trackers.update_test(_loss.item(), len(label))
                 outputs.append(output1.flatten().detach().cpu().numpy())
                 labels.append(label.flatten().detach().cpu().numpy())
-            self.trackers.update_lr(self.scheduler1.get_last_lr()[0])
-
             outputs = np.concatenate(outputs)
             labels = np.concatenate(labels)
-            outputs_int = (outputs >= 0.5).astype(float)
-            score = f0_5_score(outputs_int, labels)
-            self.trackers.log_score(score)
 
         self.model0.train()
         self.model1.train()
+        return outputs, labels
+
+    def validate(self) -> 'JointTrainer':
+        outputs, labels = self.prediction(self.test_loader_iter)
+        outputs_int = (outputs >= 0.5).astype(float)
+        score = f0_5_score(outputs_int, labels)
+        self.trackers.log_score(score)
+        self.trackers.update_lr(self.scheduler1.get_last_lr()[0])
         return self
 
     def save_model(self):
@@ -152,7 +154,6 @@ class JointTrainer(BaseTrainer):
 
     def __next__(self):
         super().__next__()
-        self.datapoint_org = self.datapoint
         self.datapoint = self.reshape_datapoint(self.datapoint)
 
 
@@ -166,10 +167,10 @@ if __name__ == '__main__':
     except RuntimeError:
         print('Failed to get public tensorboard URL')
 
-    EPOCHS = 10
+    EPOCHS = 30
     TOTAL_STEPS = 1_000_000
     SAVE_INTERVAL_MINUTES = 30
-    VALIDATE_INTERVAL = 200
+    VALIDATE_INTERVAL = 500
     LOG_INTERVAL = 100
     PRETRAINED_MODEL0 = False
     BOX_SUB_WIDTH_Z = 5
@@ -183,14 +184,14 @@ if __name__ == '__main__':
         config_model0.model.requires_grad = False
     else:
         config_model0 = ConfigurationModel(
-            model=models.HybridBinaryClassifier(dropout_rate=0.15, width=1),
-            learning_rate=0.03,
+            model=models.HybridBinaryClassifierShallow(dropout_rate=0.2, width=1),
+            learning_rate=0.02,
             l1_lambda=0.01
         )
 
     config_model1 = ConfigurationModel(
         model=models.StackingClassifierShallow(13, 1),
-        learning_rate=0.03,
+        learning_rate=0.02,
         l1_lambda=0.01,
         criterion=BCEWithLogitsLoss()
     )
@@ -205,7 +206,7 @@ if __name__ == '__main__':
         transformers=ann.transforms.transform1,
         shuffle=False,
         balance_ink=True,
-        batch_size=4,
+        batch_size=16,
         box_width_z=65,
         box_sub_width_z=BOX_SUB_WIDTH_Z,
         stride_xy=91,

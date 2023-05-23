@@ -129,6 +129,103 @@ class HybridBinaryClassifier(nn.Module):
         }
 
 
+class HybridBinaryClassifierShallow(nn.Module):
+    def __init__(self, dropout_rate: float = 0.3, width: int = 4):
+        super().__init__()
+        self.dropout_rate = dropout_rate
+        self.width = width
+
+        self.conv1 = nn.Conv3d(1, self.width, 3, 1, 1)
+        self.bn1 = nn.BatchNorm3d(self.width)
+        self.dropout1 = nn.Dropout(self.dropout_rate)
+        self.pool1 = nn.MaxPool3d(2, 2)
+
+        self.flatten = nn.Flatten(start_dim=1)
+
+        # FCN part for scalar input
+        self.fc_scalar = nn.Linear(1, 16)
+        self.bn_scalar = nn.BatchNorm1d(16)
+        self.dropout_scalar = nn.Dropout(self.dropout_rate)
+
+        # Combined layers (initialized later)
+        self.fc_combined1 = nn.Linear(4066, 128)
+        self.bn_combined = nn.BatchNorm1d(128)
+        self.dropout_combined = nn.Dropout(self.dropout_rate)
+
+        self.fc_combined2 = nn.Linear(128, 1)
+        self.sigmoid = nn.Sigmoid()
+
+    def forward(self, x: torch.Tensor, scalar_input: torch.Tensor):
+        # CNN part
+        x = F.relu(self.bn1(self.conv1(x)))
+        x = self.dropout1(x)
+        x = self.pool1(x)
+
+        x = self.flatten(x)
+
+        # FCN part
+        x_scalar = self.fc_scalar(scalar_input)
+        x_scalar = self.bn_scalar(x_scalar)
+        scalar_out = F.relu(x_scalar)
+
+        # Combine CNN and FCN outputs
+        combined = torch.cat((x, scalar_out), dim=1)
+
+        # Combined layers
+        x = self.fc_combined1(combined)
+        x = self.bn_combined(x)
+        x = F.relu(x)
+        x = self.dropout_combined(x)
+        x = self.fc_combined2(x)
+
+        return self.sigmoid(x)
+
+    @property
+    def requires_grad(self):
+        return all(param.requires_grad for param in self.parameters())
+
+    @requires_grad.setter
+    def requires_grad(self, value: bool):
+        for param in self.parameters():
+            param.requires_grad = value
+
+    def as_dict(self):
+        return {
+            'dropout_rate': self.dropout_rate,
+            'width_multiplier': self.width
+        }
+
+
+class BinaryClassifierShallowNoZ(nn.Module):
+    def __init__(self, dropout_rate: float = 0.3, width: int = 4):
+        super().__init__()
+        self.dropout_rate = dropout_rate
+        self.width = width
+
+        self.conv1 = nn.Conv3d(1, self.width, 3, 1, 1)
+        self.bn1 = nn.BatchNorm3d(self.width)
+        self.dropout1 = nn.Dropout(self.dropout_rate)
+        self.pool1 = nn.MaxPool3d(2, 2)
+
+        self.flatten = nn.Flatten(start_dim=1)
+
+        self.fc_combined2 = nn.Linear(4050, 1)
+        self.sigmoid = nn.Sigmoid()
+
+    def forward(self, x: torch.Tensor, scalar_input: torch.Tensor):
+        # CNN part
+        x = F.relu(self.bn1(self.conv1(x)))
+        x = self.dropout1(x)
+        x = self.pool1(x)
+
+        x = self.flatten(x)
+
+        # Final FC layer
+        x = self.fc_combined2(x)
+
+        return self.sigmoid(x)
+
+
 class BinaryClassifier(nn.Module):
     def __init__(self):
         super().__init__()
