@@ -167,7 +167,7 @@ if __name__ == '__main__':
     except RuntimeError:
         print('Failed to get public tensorboard URL')
 
-    EPOCHS = 30
+    EPOCHS = 60
     TOTAL_STEPS = 1_000_000
     SAVE_INTERVAL_MINUTES = 30
     VALIDATE_INTERVAL = 500
@@ -184,7 +184,7 @@ if __name__ == '__main__':
         config_model0.model.requires_grad = False
     else:
         config_model0 = ConfigurationModel(
-            model=models.HybridBinaryClassifierShallow(dropout_rate=0.2, width=1),
+            model=models.HybridBinaryClassifierShallow2(dropout_rate=0.2, width=1),
             learning_rate=0.02,
             l1_lambda=0.01
         )
@@ -197,6 +197,7 @@ if __name__ == '__main__':
     )
 
     config = Configuration(
+        info='nn.Conv3d(1, self.width, 5, 1, 2); nn.AvgPool3d(4, 4)',
         samples_max=TOTAL_STEPS,
         epochs=EPOCHS,
         volume_dataset_cls=SampleXYZ,
