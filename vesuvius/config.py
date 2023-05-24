@@ -9,7 +9,6 @@ from typing import Union, Optional, Callable, List, Tuple, Any, Type, Dict
 from torch.nn import Module
 
 from vesuvius.ann import optimisers
-from vesuvius.ann.models import HybridBinaryClassifier
 from vesuvius.ann.transforms import *
 from vesuvius.fragment_dataset import BaseDataset
 from vesuvius.sampler import BaseCropBox

@@ -29,7 +29,7 @@ class SGDOneCycleLR:
     def scheduler(self) -> optim.lr_scheduler:
         return optim.lr_scheduler.OneCycleLR(self.optimizer(),
                                              max_lr=self.learning_rate,
-                                             div_factor=10,
+                                             div_factor=3,
                                              total_steps=self.total_steps)
 
     def __str__(self):

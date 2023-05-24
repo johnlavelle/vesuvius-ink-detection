@@ -167,13 +167,14 @@ if __name__ == '__main__':
     except RuntimeError:
         print('Failed to get public tensorboard URL')
 
-    EPOCHS = 60
+    EPOCHS = 1000
     TOTAL_STEPS = 1_000_000
     SAVE_INTERVAL_MINUTES = 30
-    VALIDATE_INTERVAL = 500
+    VALIDATE_INTERVAL = 1000
     LOG_INTERVAL = 100
     PRETRAINED_MODEL0 = False
     BOX_SUB_WIDTH_Z = 5
+    LEARNING_RATE = 0.02
 
     save_interval_seconds = SAVE_INTERVAL_MINUTES * 60
 
@@ -184,20 +185,20 @@ if __name__ == '__main__':
         config_model0.model.requires_grad = False
     else:
         config_model0 = ConfigurationModel(
-            model=models.HybridBinaryClassifierShallow2(dropout_rate=0.2, width=1),
-            learning_rate=0.02,
+            model=models.HybridBinaryClassifierShallow(dropout_rate=0.2, width=1),
+            learning_rate=LEARNING_RATE,
             l1_lambda=0.01
         )
 
     config_model1 = ConfigurationModel(
         model=models.StackingClassifierShallow(13, 1),
-        learning_rate=0.02,
+        learning_rate=LEARNING_RATE,
         l1_lambda=0.01,
         criterion=BCEWithLogitsLoss()
     )
 
     config = Configuration(
-        info='nn.Conv3d(1, self.width, 5, 1, 2); nn.AvgPool3d(4, 4)',
+        info='nn.Conv3d(1, self.width, 5, 1, 2); nn.AvgPool3d(5, 5)',
         samples_max=TOTAL_STEPS,
         epochs=EPOCHS,
         volume_dataset_cls=SampleXYZ,
@@ -213,7 +214,7 @@ if __name__ == '__main__':
         stride_xy=91,
         stride_z=65,
         num_workers=5,
-        validation_steps=20,
+        validation_steps=100,
         accumulation_steps=1,
         model0=config_model0,
         model1=config_model1
