@@ -167,14 +167,14 @@ if __name__ == '__main__':
     except RuntimeError:
         print('Failed to get public tensorboard URL')
 
-    EPOCHS = 20
+    EPOCHS = 100
     TOTAL_STEPS = 1_000_000
     SAVE_INTERVAL_MINUTES = 30
     VALIDATE_INTERVAL = 1000
     LOG_INTERVAL = 100
     PRETRAINED_MODEL0 = False
     BOX_SUB_WIDTH_Z = 5
-    LEARNING_RATE = 0.02
+    LEARNING_RATE = 0.01
 
     save_interval_seconds = SAVE_INTERVAL_MINUTES * 60
 
@@ -210,7 +210,7 @@ if __name__ == '__main__':
         transformers=ann.transforms.transform_train,
         shuffle=False,
         balance_ink=True,
-        batch_size=8,
+        batch_size=32,
         box_width_z=65,
         box_sub_width_z=BOX_SUB_WIDTH_Z,
         stride_xy=91,

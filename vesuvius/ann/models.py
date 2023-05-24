@@ -137,8 +137,8 @@ class HybridBinaryClassifierShallow(nn.Module):
 
         self.conv1 = nn.Conv3d(1, self.width, 5, 1, 2)
         self.bn1 = nn.BatchNorm3d(self.width)
-        self.dropout1 = nn.Dropout(self.dropout_rate)
         self.pool1 = nn.AvgPool3d(5, 5)
+        self.dropout1 = nn.Dropout(self.dropout_rate)
 
         self.flatten = nn.Flatten(start_dim=1)
 
@@ -158,8 +158,8 @@ class HybridBinaryClassifierShallow(nn.Module):
     def forward(self, x: torch.Tensor, scalar_input: torch.Tensor):
         # CNN part
         x = F.relu(self.bn1(self.conv1(x)))
-        x = self.dropout1(x)
         x = self.pool1(x)
+        x = self.dropout1(x)
 
         x = self.flatten(x)
 
