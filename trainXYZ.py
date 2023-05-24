@@ -105,7 +105,7 @@ if __name__ == '__main__':
         crop_box_cls=CropBoxSobol,
         suffix_cache='sobol',
         label_fn=centre_pixel,
-        transformers=ann.transforms.transform1,
+        transformers=ann.transforms.transform_train,
         shuffle=True,
         balance_ink=True,
         box_width_z=5,

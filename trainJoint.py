@@ -167,7 +167,7 @@ if __name__ == '__main__':
     except RuntimeError:
         print('Failed to get public tensorboard URL')
 
-    EPOCHS = 1000
+    EPOCHS = 20
     TOTAL_STEPS = 1_000_000
     SAVE_INTERVAL_MINUTES = 30
     VALIDATE_INTERVAL = 1000
@@ -186,12 +186,14 @@ if __name__ == '__main__':
     else:
         config_model0 = ConfigurationModel(
             model=models.HybridBinaryClassifierShallow(dropout_rate=0.2, width=1),
+            optimizer_scheduler_cls=ann.optimisers.AdamOneCycleLR,
             learning_rate=LEARNING_RATE,
             l1_lambda=0.01
         )
 
     config_model1 = ConfigurationModel(
         model=models.StackingClassifierShallow(13, 1),
+        optimizer_scheduler_cls=ann.optimisers.AdamOneCycleLR,
         learning_rate=LEARNING_RATE,
         l1_lambda=0.01,
         criterion=BCEWithLogitsLoss()
@@ -205,10 +207,10 @@ if __name__ == '__main__':
         crop_box_cls=CropBoxRegular,
         suffix_cache='regular',
         label_fn=centre_pixel,
-        transformers=ann.transforms.transform1,
+        transformers=ann.transforms.transform_train,
         shuffle=False,
         balance_ink=True,
-        batch_size=16,
+        batch_size=8,
         box_width_z=65,
         box_sub_width_z=BOX_SUB_WIDTH_Z,
         stride_xy=91,
@@ -228,7 +230,7 @@ if __name__ == '__main__':
                                   pin_memory=False)
 
     config_val = copy.copy(config)
-    config_val.transformers = None
+    config_val.transformers = ann.transforms.transform_val
     test_dataset = get_dataset_regular_z(config_val, False, test_data=True)
     test_dataloader = DataLoader(test_dataset,
                                  batch_size=1,
