@@ -15,7 +15,7 @@ from vesuvius.sample_processors import SampleXYZ
 from vesuvius.sampler import CropBoxSobol
 from vesuvius.trackers import Track
 from vesuvius.trainer import BaseTrainer
-from vesuvius.trainer import centre_pixel
+from vesuvius.labels import centre_pixel
 from vesuvius.utils import timer
 
 pp = pprint.PrettyPrinter(indent=4)

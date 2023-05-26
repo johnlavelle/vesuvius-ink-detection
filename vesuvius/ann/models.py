@@ -130,35 +130,36 @@ def cnn1_sequential():
 
 
 class HybridBinaryClassifierShallow(nn.Module):
-    def __init__(self, dropout_rate: float = 0.3, width: int = 4):
+    def __init__(self, dropout_rate: float = 0.5, width: int = 4):
         super().__init__()
         self.dropout_rate = dropout_rate
         self.width = width
 
-        self.conv1 = nn.Conv3d(1, self.width, 5, 1, 2)
-        self.bn1 = nn.BatchNorm3d(self.width)
+        self.conv1 = nn.Conv3d(1, self.width, 5, 5, 1)
         self.pool1 = nn.AvgPool3d(5, 5)
+        self.bn1 = nn.BatchNorm3d(self.width)
         self.dropout1 = nn.Dropout(self.dropout_rate)
 
         self.flatten = nn.Flatten(start_dim=1)
 
         # FCN part for scalar input
-        self.fc_scalar = nn.Linear(1, 16)
-        self.bn_scalar = nn.BatchNorm1d(16)
+        self.fc_scalar = nn.Linear(1, 13)
+        self.bn_scalar = nn.BatchNorm1d(13)
         self.dropout_scalar = nn.Dropout(self.dropout_rate)
 
         # Combined layers (initialized later)
-        self.fc_combined1 = nn.Linear(340, 128)
-        self.bn_combined = nn.BatchNorm1d(128)
+        self.fc_combined1 = nn.Linear(337, 8)
+        self.bn_combined = nn.BatchNorm1d(8)
         self.dropout_combined = nn.Dropout(self.dropout_rate)
 
-        self.fc_combined2 = nn.Linear(128, 1)
+        self.fc_combined2 = nn.Linear(8, 1)
         self.sigmoid = nn.Sigmoid()
 
     def forward(self, x: torch.Tensor, scalar_input: torch.Tensor):
         # CNN part
-        x = F.relu(self.bn1(self.conv1(x)))
-        x = self.pool1(x)
+        x = self.conv1(x)
+        x = self.bn1(x)
+        x = F.relu(x)
         x = self.dropout1(x)
 
         x = self.flatten(x)
@@ -214,7 +215,9 @@ class BinaryClassifierShallowNoZ(nn.Module):
 
     def forward(self, x: torch.Tensor, scalar_input: torch.Tensor):
         # CNN part
-        x = F.relu(self.bn1(self.conv1(x)))
+        x = self.conv1(x)
+        # x = self.bn1(x)
+        x = F.relu(x)
         x = self.dropout1(x)
         x = self.pool1(x)
 
@@ -308,8 +311,8 @@ class StackingClassifierShallow(nn.Module):
     def __init__(self, input_size: int, width_multiplier: int = 1):
         super().__init__()
         self.width_multiplier = width_multiplier
-        self.fc1 = nn.Linear(input_size, 16 * self.width_multiplier)
-        self.fc2 = nn.Linear(16 * self.width_multiplier, 1)
+        self.fc1 = nn.Linear(input_size, 13 * self.width_multiplier)
+        self.fc2 = nn.Linear(13 * self.width_multiplier, 1)
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         x = self.fc1(x)

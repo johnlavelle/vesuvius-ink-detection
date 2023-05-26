@@ -2,20 +2,13 @@ import json
 from abc import ABC, abstractmethod
 from typing import Generator, Any, Type, Tuple, Iterable
 from itertools import repeat, chain, islice
-from torch.utils.data import DataLoader
 
-import numpy as np
 import torch
 from torch import nn
 from tqdm import tqdm
-from xarray import DataArray
 
 from vesuvius.config import Configuration
 from vesuvius.trackers import Track
-
-
-def centre_pixel(da: DataArray) -> DataArray:
-    return da.isel(x=len(da.x) // 2, y=len(da.y) // 2).astype(np.float32)
 
 
 class BaseTrainer(ABC):

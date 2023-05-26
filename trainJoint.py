@@ -17,7 +17,8 @@ from vesuvius.datapoints import DatapointTuple
 from vesuvius.sample_processors import SampleXYZ
 from vesuvius.sampler import CropBoxRegular
 from vesuvius.trackers import Track
-from vesuvius.trainer import BaseTrainer, centre_pixel
+from vesuvius.trainer import BaseTrainer
+from vesuvius.labels import centre_pixel
 from vesuvius.utils import timer, pretty_print_dataclass
 from vesuvius.metric import f0_5_score
 
@@ -167,11 +168,11 @@ if __name__ == '__main__':
     except RuntimeError:
         print('Failed to get public tensorboard URL')
 
-    EPOCHS = 100
+    EPOCHS = 10
     TOTAL_STEPS = 1_000_000
     SAVE_INTERVAL_MINUTES = 30
-    VALIDATE_INTERVAL = 1000
-    LOG_INTERVAL = 100
+    VALIDATE_INTERVAL = 100
+    LOG_INTERVAL = 10
     PRETRAINED_MODEL0 = False
     BOX_SUB_WIDTH_Z = 5
     LEARNING_RATE = 0.01
@@ -210,7 +211,7 @@ if __name__ == '__main__':
         transformers=ann.transforms.transform_train,
         shuffle=False,
         balance_ink=True,
-        batch_size=32,
+        batch_size=16,
         box_width_z=65,
         box_sub_width_z=BOX_SUB_WIDTH_Z,
         stride_xy=91,
