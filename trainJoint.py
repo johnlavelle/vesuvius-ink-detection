@@ -49,8 +49,8 @@ class JointTrainer(BaseTrainer):
         scalar = datapoint.label
         try:
             return scalar, self.model0(voxels.to(self.device), scalar.to(self.device))
-        except RuntimeError:
-            pass
+        except RuntimeError as err:
+            raise err
 
     @staticmethod
     def _assert_all_values_are_one_or_zero(arr: torch.Tensor):
@@ -91,11 +91,18 @@ class JointTrainer(BaseTrainer):
 
     def loss(self) -> 'JointTrainer':
         base_loss = self.criterion1(self.output1, self.labels)
-        l1_regularization0 = torch.norm(getattr(self.model0, 'module', self.model0).fc_scalar.weight, p=1)
-        l1_regularization1 = torch.norm(getattr(self.model1, 'module', self.model1).fc2.weight, p=1)
-        l10 = self.config.model0.l1_lambda * l1_regularization0
-        l11 = self.config.model1.l1_lambda * l1_regularization1
+        if self.config.model0.l1_lambda:
+            l1_regularization0 = torch.norm(getattr(self.model0, 'module', self.model0).fc_scalar.weight, p=1)
+            l10 = self.config.model0.l1_lambda * l1_regularization0
+        else:
+            l10 = 0
+        if self.config.model1.l1_lambda:
+            l1_regularization1 = torch.norm(getattr(self.model1, 'module', self.model1).fc2.weight, p=1)
+            l11 = self.config.model1.l1_lambda * l1_regularization1
+        else:
+            l11 = 0
         self._loss = base_loss + l10 + l11
+
         self.trackers.update_train(self._loss.item(), self.labels.shape[0])
         return self
 
@@ -168,14 +175,14 @@ if __name__ == '__main__':
     except RuntimeError:
         print('Failed to get public tensorboard URL')
 
-    EPOCHS = 10
+    EPOCHS = 30
     TOTAL_STEPS = 1_000_000
     SAVE_INTERVAL_MINUTES = 30
     VALIDATE_INTERVAL = 100
     LOG_INTERVAL = 10
     PRETRAINED_MODEL0 = False
     BOX_SUB_WIDTH_Z = 5
-    LEARNING_RATE = 0.01
+    LEARNING_RATE = 0.02
 
     save_interval_seconds = SAVE_INTERVAL_MINUTES * 60
 
@@ -189,14 +196,14 @@ if __name__ == '__main__':
             model=models.HybridBinaryClassifierShallow(dropout_rate=0.2, width=1),
             optimizer_scheduler_cls=ann.optimisers.AdamOneCycleLR,
             learning_rate=LEARNING_RATE,
-            l1_lambda=0.01
+            l1_lambda=0.0
         )
 
     config_model1 = ConfigurationModel(
         model=models.StackingClassifierShallow(13, 1),
         optimizer_scheduler_cls=ann.optimisers.AdamOneCycleLR,
         learning_rate=LEARNING_RATE,
-        l1_lambda=0.01,
+        l1_lambda=0.0001,
         criterion=BCEWithLogitsLoss()
     )
 
@@ -211,7 +218,7 @@ if __name__ == '__main__':
         transformers=ann.transforms.transform_train,
         shuffle=False,
         balance_ink=True,
-        batch_size=16,
+        batch_size=32,
         box_width_z=65,
         box_sub_width_z=BOX_SUB_WIDTH_Z,
         stride_xy=91,

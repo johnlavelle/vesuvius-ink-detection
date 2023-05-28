@@ -135,11 +135,11 @@ class HybridBinaryClassifierShallow(nn.Module):
         self.dropout_rate = dropout_rate
         self.width = width
 
-        self.conv1 = nn.Conv3d(1, self.width, 5, 5, 1)
-        self.pool1 = nn.AvgPool3d(5, 5)
+        self.conv1 = nn.Conv3d(1, self.width, 5, 1, 0)
         self.bn1 = nn.BatchNorm3d(self.width)
         self.dropout1 = nn.Dropout(self.dropout_rate)
 
+        self.pool1 = nn.AvgPool3d((1, 11, 11))
         self.flatten = nn.Flatten(start_dim=1)
 
         # FCN part for scalar input
@@ -148,7 +148,7 @@ class HybridBinaryClassifierShallow(nn.Module):
         self.dropout_scalar = nn.Dropout(self.dropout_rate)
 
         # Combined layers (initialized later)
-        self.fc_combined1 = nn.Linear(337, 8)
+        self.fc_combined1 = nn.Linear(62, 8)
         self.bn_combined = nn.BatchNorm1d(8)
         self.dropout_combined = nn.Dropout(self.dropout_rate)
 
@@ -158,6 +158,7 @@ class HybridBinaryClassifierShallow(nn.Module):
     def forward(self, x: torch.Tensor, scalar_input: torch.Tensor):
         # CNN part
         x = self.conv1(x)
+        x = self.pool1(x)
         x = self.bn1(x)
         x = F.relu(x)
         x = self.dropout1(x)
@@ -176,10 +177,10 @@ class HybridBinaryClassifierShallow(nn.Module):
         x = self.fc_combined1(combined)
         x = self.bn_combined(x)
         x = F.relu(x)
-        x = self.dropout_combined(x)
+        # x = self.dropout_combined(x)
         x = self.fc_combined2(x)
 
-        return self.sigmoid(x)
+        return F.relu(x)
 
     @property
     def requires_grad(self):
