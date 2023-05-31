@@ -84,7 +84,10 @@ class TorchDatasetIter(DatasetIter):
             raise StopIteration
 
         ink_count = self.current_ds.labels.sum().compute().item()
-        samples = self.samples_handler.normalise(ink_count)
+        if self.balance_ink:
+            samples = self.samples_handler.normalise(ink_count)
+        else:
+            samples = None
         return self.dataset_class(self.current_ds,
                                   self.box_width_sample,
                                   self.z_box_width,

@@ -1,4 +1,4 @@
-from typing import Tuple
+from typing import Iterable
 
 from vesuvius.data_io import read_dataset_from_zarr
 
@@ -12,7 +12,7 @@ class WeightedSamples:
     proportional to the number of ink pixels in the fragment.
     """
 
-    def __init__(self, samples: int, prefix: str, fragment_keys: Tuple[int, ...] = (1, 2, 3), num_workers=0):
+    def __init__(self, samples: int, prefix: str, fragment_keys: Iterable = (1, 2, 3), num_workers=0):
         """
 
         :param samples: The number of samples to generate

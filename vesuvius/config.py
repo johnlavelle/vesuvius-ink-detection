@@ -4,7 +4,7 @@ import multiprocessing as mp
 import os
 import warnings
 from dataclasses import dataclass, field, asdict
-from typing import Union, Optional, Callable, List, Tuple, Any, Type, Dict
+from typing import Union, Optional, Callable, Iterable, Tuple, Any, Type, Dict
 
 from torch.nn import Module
 
@@ -76,7 +76,7 @@ class Configuration:
     label_fn: Callable[..., Any] = None
     transformers: Optional[Callable[..., Any]] = None
     batch_size: int = 32
-    fragments: Union[List[int], Tuple[int, ...]] = (1, 2, 3)
+    fragments: Union[Iterable[int], Iterable[str]] = (1, 2, 3)
     test_box: Tuple[int, int, int, int] = (xl, yl, xl + width, yl + height)  # Hold back rectangle
     test_box_fragment: int = 2
     box_width_xy: int = 91

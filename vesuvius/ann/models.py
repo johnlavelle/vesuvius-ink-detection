@@ -130,13 +130,13 @@ def cnn1_sequential():
 
 
 class HybridBinaryClassifierShallow(nn.Module):
-    def __init__(self, dropout_rate: float = 0.5, width: int = 4):
+    def __init__(self, dropout_rate: float = 0.5, width_multiplier: int = 1):
         super().__init__()
         self.dropout_rate = dropout_rate
-        self.width = width
+        self.width_multiplier = width_multiplier
 
-        self.conv1 = nn.Conv3d(1, self.width, 5, 1, 0)
-        self.bn1 = nn.BatchNorm3d(self.width)
+        self.conv1 = nn.Conv3d(1, self.width_multiplier, 5, 1, 0)
+        self.bn1 = nn.BatchNorm3d(self.width_multiplier)
         self.dropout1 = nn.Dropout(self.dropout_rate)
 
         self.pool1 = nn.AvgPool3d((1, 11, 11))
@@ -194,7 +194,7 @@ class HybridBinaryClassifierShallow(nn.Module):
     def as_dict(self):
         return {
             'dropout_rate': self.dropout_rate,
-            'width_multiplier': self.width
+            'width_multiplier': self.width_multiplier
         }
 
 
@@ -311,6 +311,7 @@ class StackingClassifier(nn.Module):
 class StackingClassifierShallow(nn.Module):
     def __init__(self, input_size: int, width_multiplier: int = 1):
         super().__init__()
+        self.input_size = input_size
         self.width_multiplier = width_multiplier
         self.fc1 = nn.Linear(input_size, 13 * self.width_multiplier)
         self.fc2 = nn.Linear(13 * self.width_multiplier, 1)
@@ -324,5 +325,6 @@ class StackingClassifierShallow(nn.Module):
 
     def as_dict(self):
         return {
+            'input_size': self.input_size,
             'width_multiplier': self.width_multiplier
         }

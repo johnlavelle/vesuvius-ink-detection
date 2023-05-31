@@ -22,7 +22,7 @@ class BaseDataset(ABC, Dataset):
                  dataset: Any,
                  box_width_xy: int,
                  box_width_z: int,
-                 max_iterations: int = 10_000,
+                 max_iterations: int = None,
                  label_operation: Callable[[DataArray], float] = lambda x: x.mean(),
                  transformer: Callable[[torch.Tensor], DataArray] = None,
                  crop_cls: Type[Union[BaseCropBox, CropBoxSobol, CropBoxRegular]] = CropBoxSobol,

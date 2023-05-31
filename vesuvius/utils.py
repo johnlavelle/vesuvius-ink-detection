@@ -11,13 +11,13 @@ from skimage.measure import find_contours
 from xarray import DataArray, Dataset
 
 
-def normalise_images(dataset: Dataset) -> Dataset:
+def normalise_images(data_array: DataArray) -> DataArray:
     # # normalize across the z layers
-    ds_z_mean = dataset['images'].mean(dim=['x', 'y'], skipna=True).compute()
-    ds_z_std = dataset['images'].std(dim=['x', 'y'], skipna=True).compute()
-    dataset['images'] = (dataset['images'] - ds_z_mean) / ds_z_std
-    dataset['images'].attrs['ds_z_mean'] = ds_z_mean.values
-    dataset['images'].attrs['ds_z_std'] = ds_z_std.values
+    ds_z_mean = data_array.mean(dim=['x', 'y'], skipna=True)
+    ds_z_std = data_array.std(dim=['x', 'y'], skipna=True)
+    data_array = (data_array - ds_z_mean) / ds_z_std
+    # data_array.attrs['ds_z_mean'] = ds_z_mean
+    # data_array.attrs['ds_z_std'] = ds_z_std
 
     # normalize entire dataset
     # ds_mean = dataset['images'].mean(skipna=True).compute()
@@ -26,7 +26,7 @@ def normalise_images(dataset: Dataset) -> Dataset:
     # dataset['images'].attrs['mean'] = ds_mean.item()
     # dataset['images'].attrs['std'] = ds_std.item()
 
-    return dataset
+    return data_array
 
 
 def normalise_voxels(voxels) -> DataArray:

@@ -1,7 +1,7 @@
 import json
 from abc import ABC, abstractmethod
-from typing import Generator, Any, Type, Tuple, Iterable
 from itertools import repeat, chain, islice
+from typing import Generator, Any, Type, Tuple, Iterable
 
 import torch
 from torch import nn
@@ -14,12 +14,14 @@ from vesuvius.trackers import Track
 class BaseTrainer(ABC):
 
     def __init__(self,
-                 train_dataset: Any,
-                 test_dataset: Any,
-                 trackers: Track,
-                 config: Configuration) -> None:
+                 config: Configuration,
+                 trackers: Track = None,
+                 train_dataset: Any = None,
+                 val_dataset: Any = None,
+                 test_dataset: Any = None) -> None:
 
         self.train_dataset = train_dataset
+        self.val_dataset = val_dataset
         self.test_dataset = test_dataset
 
         self.config = config
@@ -32,8 +34,12 @@ class BaseTrainer(ABC):
         self.os = None
         self.optimizer0, self.scheduler0, self.criterion0 = None, None, None
 
-        self.train_loader_iter = self.get_train_loader_iter()
-        self.test_loader_iter = self.get_test_loader_iter()
+        if self.train_dataset:
+            self.train_loader_iter = self.get_train_loader_iter()
+        if self.val_dataset:
+            self.val_loader_iter = self.get_val_loader_iter()
+        if self.test_dataset:
+            self.test_loader_iter = self.get_test_loader_iter()
 
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
         print(f'Using device: {self.device}', '\n')
@@ -55,11 +61,14 @@ class BaseTrainer(ABC):
         self.train_loader_iter = chain.from_iterable(repeat(self.train_dataset, self.config.epochs))
         return islice(self.train_loader_iter, self.total_loops)
 
+    def get_val_loader_iter(self) -> Iterable:
+        return list(islice(self.val_dataset, min(len(self.val_dataset), self.config.validation_steps)))
+
     def get_test_loader_iter(self) -> Iterable:
-        return list(islice(self.test_dataset, min(len(self.test_dataset), self.config.validation_steps)))
+        return self.test_dataset
 
     @abstractmethod
-    def forward(self) -> torch.Tensor:
+    def forward0(self) -> torch.Tensor:
         ...
 
     @abstractmethod
@@ -79,7 +88,7 @@ class BaseTrainer(ABC):
         try:
             self.model0.eval()
             with torch.no_grad():
-                output = self.model0.forward(*self.dummy_input())
+                output = self.model0.forward0(*self.dummy_input())
                 assert output.shape == (self.config.batch_size, 1)
         except RuntimeError as e:
             raise RuntimeError(f'{e}\n'

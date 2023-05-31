@@ -2,11 +2,10 @@ import copy
 import time
 from typing import Tuple, Iterable
 
-import numpy as np
 import dask
+import numpy as np
 import torch
 from torch.nn import BCEWithLogitsLoss
-from torch.utils.data import DataLoader
 
 from src import tensorboard_access
 from vesuvius import ann
@@ -14,18 +13,18 @@ from vesuvius.ann import models
 from vesuvius.config import Configuration, ConfigurationModel
 from vesuvius.dataloader import get_dataset_regular_z
 from vesuvius.datapoints import DatapointTuple
+from vesuvius.labels import centre_pixel
+from vesuvius.metric import f0_5_score
 from vesuvius.sample_processors import SampleXYZ
 from vesuvius.sampler import CropBoxRegular
 from vesuvius.trackers import Track
 from vesuvius.trainer import BaseTrainer
-from vesuvius.labels import centre_pixel
 from vesuvius.utils import timer, pretty_print_dataclass
-from vesuvius.metric import f0_5_score
 
 
 class JointTrainer(BaseTrainer):
     def __init__(self, *args, **kwargs):
-        super().__init__(*args, **kwargs)
+        super().__init__(**kwargs)
         self.output0 = None
         self.output1 = None
         self.config_test = None
@@ -61,7 +60,7 @@ class JointTrainer(BaseTrainer):
         self.optimizer1.zero_grad()
         return self
 
-    def forward(self) -> 'JointTrainer':
+    def forward0(self) -> 'JointTrainer':
         self.model0.train()
         self.outputs_collected, self.labels_collected = [], []
         for s in range(config.accumulation_steps):
@@ -84,7 +83,7 @@ class JointTrainer(BaseTrainer):
     def reshape_output0(self, arr: torch.Tensor):
         return arr.reshape([-1, self.input1_length])
 
-    def forward2(self) -> 'JointTrainer':
+    def forward1(self) -> 'JointTrainer':
         self.model1.train()
         self.output1 = self.model1(self.output0.squeeze())
         return self
@@ -141,12 +140,18 @@ class JointTrainer(BaseTrainer):
         return outputs, labels
 
     def validate(self) -> 'JointTrainer':
-        outputs, labels = self.prediction(self.test_loader_iter)
-        outputs_int = (outputs >= 0.5).astype(float)
-        score = f0_5_score(outputs_int, labels)
+        outputs, labels = self.prediction(self.val_loader_iter)
+        predicted_labels_int = (outputs >= 0.5).astype(float)
+        score = f0_5_score(predicted_labels_int, labels)
         self.trackers.log_score(score)
         self.trackers.update_lr(self.scheduler1.get_last_lr()[0])
         return self
+
+    def inference(self):
+        outputs, labels = self.prediction(self.val_loader_iter)
+        predicted_labels_int = (outputs >= 0.5).astype(float)
+        score = f0_5_score(predicted_labels_int, labels)
+        return outputs, labels, score
 
     def save_model(self):
         self._save_model(self.model0, suffix='0')
@@ -156,8 +161,8 @@ class JointTrainer(BaseTrainer):
         kwargs = {k: v.repeat_interleave(self.num_z_vols, dim=0) for k, v in datapoint._asdict().items() if
                   k != 'voxels'}
         kwargs['label'] = kwargs['label'].float()
-        kwargs['voxels'] = self.datapoint.voxels.reshape(self.batch_size * self.num_z_vols,
-                                                         1, config.box_sub_width_z, 91, 91)
+        kwargs['voxels'] = datapoint.voxels.reshape(self.batch_size * self.num_z_vols,
+                                                    1, config.box_sub_width_z, 91, 91)
         return DatapointTuple(**kwargs)
 
     def __next__(self):
@@ -166,34 +171,37 @@ class JointTrainer(BaseTrainer):
 
 
 if __name__ == '__main__':
-    dask.config.set(scheduler='synchronous')
-
-    start_time = time.time()
+    # dask.config.set(scheduler='synchronous')
 
     try:
         print('Tensorboard URL: ', tensorboard_access.get_public_url(), '\n')
     except RuntimeError:
         print('Failed to get public tensorboard URL')
 
-    EPOCHS = 30
+    TRAIN = False
+    INFERENCE = True
+
+    EPOCHS = 10
     TOTAL_STEPS = 1_000_000
     SAVE_INTERVAL_MINUTES = 30
     VALIDATE_INTERVAL = 100
     LOG_INTERVAL = 10
     PRETRAINED_MODEL0 = False
     BOX_SUB_WIDTH_Z = 5
-    LEARNING_RATE = 0.02
+    LEARNING_RATE = 0.03
 
     save_interval_seconds = SAVE_INTERVAL_MINUTES * 60
 
-    if PRETRAINED_MODEL0:
-        config0 = Configuration.from_dict('configs/XYZ/')
-        assert config0.box_width_z == BOX_SUB_WIDTH_Z
-        config_model0 = config0.model0
+    if INFERENCE:
+        _config = Configuration.from_dict('configs/Joint/')
+        assert _config.box_sub_width_z == BOX_SUB_WIDTH_Z
+        config_model0 = _config.model0
         config_model0.model.requires_grad = False
+        config_model1 = _config.model1
+        config_model1.model.requires_grad = False
     else:
         config_model0 = ConfigurationModel(
-            model=models.HybridBinaryClassifierShallow(dropout_rate=0.2, width=1),
+            model=models.HybridBinaryClassifierShallow(dropout_rate=0.2, width_multiplier=1),
             optimizer_scheduler_cls=ann.optimisers.AdamOneCycleLR,
             learning_rate=LEARNING_RATE,
             l1_lambda=0.0
@@ -223,34 +231,33 @@ if __name__ == '__main__':
         box_sub_width_z=BOX_SUB_WIDTH_Z,
         stride_xy=91,
         stride_z=65,
-        num_workers=5,
+        num_workers=1,
         validation_steps=100,
         accumulation_steps=1,
         model0=config_model0,
-        model1=config_model1
+        model1=config_model1,
+        fragments=(1, 2, 3)
     )
-
-    train_dataset = get_dataset_regular_z(config, False, test_data=False)
-    train_dataloader = DataLoader(train_dataset,
-                                  batch_size=1,
-                                  num_workers=config.num_workers,
-                                  drop_last=True,
-                                  pin_memory=False)
 
     config_val = copy.copy(config)
     config_val.transformers = ann.transforms.transform_val
-    test_dataset = get_dataset_regular_z(config_val, False, test_data=True)
-    test_dataloader = DataLoader(test_dataset,
-                                 batch_size=1,
-                                 num_workers=config.num_workers,
-                                 drop_last=True,
-                                 pin_memory=False)
 
+    config_inference = copy.copy(config)
+    config_inference.prefix = "/data/kaggle/input/vesuvius-challenge-ink-detection/test/"
+    config_inference.fragments = ('a', 'b')
+    config_inference.balance_ink = False
+    config_inference.validation_steps = 1_000_000
+
+    train_dataset = get_dataset_regular_z(config, False, validation=False)
+    val_dataset = get_dataset_regular_z(config_val, False, validation=True)
+    test_dataset = get_dataset_regular_z(config_inference, False, validation=True)
+
+    start_time = time.time()
     with Track() as track, timer("Training"):
-        trainer = JointTrainer(train_dataset, test_dataset, track, config)
+        trainer = JointTrainer(train_dataset, val_dataset, track, config)
 
         for i, train in enumerate(trainer):
-            train.zero_grad().forward().forward2().loss().backward().step()
+            train.zero_grad().forward0().forward1().loss().backward().step()
 
             if i == 0:
                 continue
@@ -263,3 +270,6 @@ if __name__ == '__main__':
                 train.validate()
                 train.trackers.log_test()
         train.save_model()
+
+    if INFERENCE:
+        trainer.inference()

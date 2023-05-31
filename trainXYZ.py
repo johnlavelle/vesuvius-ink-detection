@@ -25,7 +25,7 @@ dask.config.set(scheduler='synchronous')
 class TrainerXYZ(BaseTrainer):
 
     def __init__(self, *args, **kwargs) -> None:
-        super().__init__(*args, **kwargs)
+        super().__init__(**kwargs)
         self.outputs = None
         self.loss_value = None
 
@@ -40,7 +40,7 @@ class TrainerXYZ(BaseTrainer):
     def validate(self) -> 'TrainerXYZ':
         self.model0.eval()
         with torch.no_grad():
-            for datapoint_test in self.test_loader_iter:
+            for datapoint_test in self.val_loader_iter:
                 outputs = self._apply_forward(datapoint_test)
                 val_loss = self.criterion0(outputs, datapoint_test.label.float().to(self.device))
                 batch_size = len(datapoint_test.label)
@@ -48,7 +48,7 @@ class TrainerXYZ(BaseTrainer):
         self.trackers.log_test()
         return self
 
-    def forward(self) -> 'TrainerXYZ':
+    def forward0(self) -> 'TrainerXYZ':
         self.model0.train()
         self.optimizer0.zero_grad()
         self.outputs = self._apply_forward(self.datapoint)
@@ -146,7 +146,7 @@ if __name__ == '__main__':
 
             for i, train in enumerate(trainer):
                 pass
-                train.forward().loss().backward().step()
+                train.forward0().loss().backward().step()
 
                 if i == 0:
                     continue

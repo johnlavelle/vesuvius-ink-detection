@@ -148,7 +148,7 @@ def get_test_loader(cfg: Configuration) -> DataLoader:
     return DataLoader(test_dataset, batch_size=cfg.batch_size, shuffle=False, num_workers=cfg.num_workers)
 
 
-def get_dataset_regular_z(cfg: dataclass, force_cache_reset, test_data=False) -> Dataset:
+def get_dataset_regular_z(cfg: dataclass, force_cache_reset, validation=False) -> Dataset:
     def collate_catch_errs(batch):
         filtered_batch = []
         for item in batch:
@@ -162,7 +162,7 @@ def get_dataset_regular_z(cfg: dataclass, force_cache_reset, test_data=False) ->
             return None
 
     cfg.collate_fn = collate_catch_errs
-    return get_train_dataset(cfg, cached=True, reset_cache=force_cache_reset, worker_init='same', test_data=test_data)
+    return get_train_dataset(cfg, cached=True, reset_cache=force_cache_reset, worker_init='same', test_data=validation)
 
 
 def get_train_datasets(cfg, epochs, cached_data, force_cache_reset, reset_cache_epoch_interval) \

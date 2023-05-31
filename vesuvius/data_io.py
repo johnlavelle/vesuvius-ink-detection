@@ -1,36 +1,43 @@
-import gc
+import ctypes
 import glob
+import itertools
 import json
 import os
-import time
-import tempfile
-from pathlib import Path
-import itertools
-
-
 import shutil
+import tempfile
 import warnings
-from dataclasses import asdict
 from functools import lru_cache
 from os.path import join
+from pathlib import Path
 from typing import Any, Tuple
 from typing import Dict, Union, Literal
 
-import psutil
-
-
 import dask
 import numpy as np
-import torch
+import psutil
 import torch.nn as nn
 import xarray as xr
 import zarr
-from tqdm import tqdm
+from dask.distributed import Client, LocalCluster
+from rasterio.errors import RasterioIOError
 from zarr.sync import ProcessSynchronizer
 
-from vesuvius.utils import normalise_images
-from vesuvius.config import Configuration
 from vesuvius.ann.transforms import *
+from vesuvius.config import Configuration
+from vesuvius.utils import normalise_images
+
+
+def trim_memory() -> int:
+    libc = ctypes.CDLL("libc.so.6")
+    return libc.malloc_trim(0)
+
+
+def print_memory_usage():
+    memory = psutil.virtual_memory()
+    print('Total Memory     :', round(memory.total / (1024.0 ** 3), 2), 'GB')
+    print('Available Memory :', round(memory.available / (1024.0 ** 3), 2), 'GB')
+    print('Used Memory      :', round(memory.used / (1024.0 ** 3), 2), 'GB')
+    print('Memory Percentage:', memory.percent, '%')
 
 
 def read_tiffs(fragment: int, prefix: str) -> xr.Dataset:
@@ -38,12 +45,15 @@ def read_tiffs(fragment: int, prefix: str) -> xr.Dataset:
     with warnings.catch_warnings():
         warnings.simplefilter("ignore")
         tiff_fnames = sorted(glob.glob(join(prefix, fragment, 'surface_volume/*.tif')))
-        ds = xr.open_mfdataset(tiff_fnames, concat_dim='band', combine='nested', parallel=True).transpose('y', 'x',
+        ds = xr.open_mfdataset(tiff_fnames, concat_dim='band', combine='nested', parallel=False).transpose('y', 'x',
                                                                                                           'band')
         ds = ds.rename({'band_data': 'images'})
-        labels_ink = xr.open_dataset(join(prefix, fragment, "inklabels.png")).squeeze()
+        try:
+            labels_ink = xr.open_dataset(join(prefix, fragment, "inklabels.png")).squeeze()
+            ds['labels'] = labels_ink['band_data'].astype(bool)
+        except RasterioIOError:
+            pass
         mask = xr.open_dataset(join(prefix, fragment, "mask.png")).squeeze()
-        ds['labels'] = labels_ink['band_data'].astype(bool)
         ds['mask'] = mask['band_data'].astype(bool)
         ds.mask.attrs = ''
         ds = ds.rename({'band': 'z'})
@@ -77,37 +87,65 @@ def dataset_to_zarr(dataset: xr.Dataset, zarr_path: str, append_dim: str) -> Non
 
 def save_zarr(fragment: int, prefix: str, normalize=True) -> str:
     """Write a dataset to a zarr file"""
-    dataset = read_tiffs(fragment, prefix).chunk({'z': 1})
-    zarr_path = join(prefix, str(fragment), 'surface_volume.zarr')
 
-    # Append one z layer each step, to reduce the memory overhead
-    ds_images = dataset['images'].where(dataset.mask).to_dataset(name='images')
-    ds_images = normalise_images(ds_images) if normalize else ds_images
+    print_memory_usage()
 
-    z_chunk_size = 1
-    for z in tqdm(range(0, len(ds_images.z.values), z_chunk_size), desc=f'Writing fragment {fragment} to zarr',
-                  position=1):
-        ds_sub = ds_images.isel(z=slice(z, z + z_chunk_size)).chunk({'x': 128, 'y': 128, 'z': z_chunk_size})
+    tmp_dir = '/data/tmp/'
+    if os.path.exists(tmp_dir):
+        dask.config.set({'temporary_directory': tmp_dir})
+    cluster = LocalCluster(processes=True, n_workers=1, threads_per_worker=1, memory_limit='7GB')
+    with Client(cluster) as client:
+        print(client.dashboard_link)
 
-        mode: Literal["w", "w-", "a", "r+", None]
-        if z == 0:
-            mode, append_dim, encodings_ = 'w-', None, encodings(['images'])
-        else:
-            mode, append_dim, encodings_ = 'a', 'z', None
+        print('reading ...')
+        dataset = read_tiffs(fragment, prefix)
+        client.run(trim_memory)
 
-        ds_sub.to_zarr(zarr_path, mode=mode, encoding=encodings_, consolidated=True, compute=True,
-                       append_dim=append_dim)
-        gc.collect()
+        zarr_path = join(prefix, str(fragment), 'surface_volume.zarr')
 
-    # Write the labels and mask
-    for v in ['labels', 'mask']:
-        ds2d = dataset[[v]].astype(bool)
-        encodings_ = encodings([v])
-        ds2d.to_zarr(zarr_path, mode='a', encoding=encodings_, consolidated=True, compute=True)
+        dataset = dataset.chunk({'x': 2048, 'y': 2048, 'z': 1})
+        dataset['images'] = dataset['images'].where(dataset.mask)
 
-    # dataset_reload = read_dataset_from_zarr(fragment, 0, prefix, normalize=False)
-    # dataset_reload = dataset_reload.chunk({'x': 128, 'y': 128, 'z': 65})
-    # dataset_reload.to_zarr(zarr_path, encoding=encodings(('labels', 'mask', 'images')))
+        print('Normalizing ..')
+        dataset['images'] = normalise_images(dataset['images']) if normalize else dataset['images']
+        # dataset['images'] = dataset['images']
+        client.run(trim_memory)
+
+        dataset['mask'] = dataset['mask'].astype(bool)
+        if not ('labels' in dataset):
+            dataset['labels'] = xr.zeros_like(dataset['mask']).astype(bool)
+
+        print('persist ...')
+        dataset = dataset.persist()
+        client.run(trim_memory)
+
+        print('saving ...')
+        dataset = dataset.chunk({'x': 128, 'y': 128, 'z': 65})
+
+        dataset.to_zarr(zarr_path,
+                        mode='w',
+                        encoding=encodings(dataset.variables),
+                        consolidated=True,
+                        compute=True)
+        client.run(trim_memory)
+    # cluster.close()
+    # client.close()
+
+        # z_chunk_size = 1
+        # for z in tqdm(range(0, len(dataset.z.values), z_chunk_size), desc=f'Writing fragment {fragment} to zarr',
+        #               position=1):
+        #     ds_sub = dataset.isel(z=slice(z, z + z_chunk_size)).chunk({'x': 128, 'y': 128, 'z': z_chunk_size})
+        #
+        #     mode: Literal["w", "w-", "a", "r+", None]
+        #     if z == 0:
+        #         mode, append_dim, encodings_ = 'w-', None, encodings(['images'])
+        #     else:
+        #         mode, append_dim, encodings_ = 'a', 'z', None
+        #
+        #     ds_sub.to_zarr(zarr_path, mode=mode, encoding=encodings_, consolidated=True, compute=True,
+        #                    append_dim=append_dim)
+        #     gc.collect()
+
     return zarr_path
 
 
@@ -134,8 +172,7 @@ def rechunk_org(ds, zarr_path):
 def read_dataset_from_zarr(fragment: Union[int, str], workers: int, prefix: str, normalize: bool = True) -> xr.Dataset:
     zarr_path = join(prefix, str(fragment), 'surface_volume.zarr')
     if not os.path.exists(zarr_path):
-        with dask.config.set(scheduler='processes', num_workers=workers):
-            save_zarr(fragment, prefix, normalize)
+        save_zarr(fragment, prefix, normalize)
     sync = ProcessSynchronizer('/tmp/tmpz7x9z5xh')
     with dask.config.set(scheduler='synchronous'):
         dataset = xr.open_zarr(zarr_path,
@@ -152,7 +189,6 @@ def read_dataset_from_zarr(fragment: Union[int, str], workers: int, prefix: str,
 # Models
 class SaveModel:
     def __init__(self, path):
-
         self.path = path
         self.name = ''
         self.conf_path = join(self.path, f"config{self.name}.json")
@@ -230,8 +266,9 @@ def open_dataset(zarr_path: str):
             print('Loading dataset into memory...', '\n')
             ds.load()
         else:
-            print('Loading coordinates into memory...', '\n')
-            ds[ds.coords.keys()].load()
+            pass
+            # print('Loading coordinates into memory...', '\n')
+            # ds[ds.coords.keys()].load()
         return ds
 
 
