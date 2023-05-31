@@ -1,11 +1,12 @@
 import copy
 import time
-from typing import Tuple, Iterable
+from typing import Tuple, Iterable, List
 
-import dask
 import numpy as np
 import torch
 from torch.nn import BCEWithLogitsLoss
+import pandas as pd
+import matplotlib.pyplot as plt
 
 from src import tensorboard_access
 from vesuvius import ann
@@ -24,7 +25,7 @@ from vesuvius.utils import timer, pretty_print_dataclass
 
 class JointTrainer(BaseTrainer):
     def __init__(self, *args, **kwargs):
-        super().__init__(**kwargs)
+        super().__init__(*args, **kwargs)
         self.output0 = None
         self.output1 = None
         self.config_test = None
@@ -116,42 +117,56 @@ class JointTrainer(BaseTrainer):
         self.scheduler1.step()
         return self
 
-    def prediction(self, data_iter: Iterable) -> Tuple[np.ndarray, np.ndarray]:
+    def prediction(self, data_iter: Iterable) -> Tuple[np.ndarray, np.ndarray, List, List]:
         self.model0.eval()
         self.model1.eval()
 
         with torch.no_grad():
-            labels, outputs = [], []
+            labels, outputs, xs, ys, fragments = [], [], [], [], []
             for datapoint in data_iter:
+                x_start = datapoint.x_start
+                x_stop = datapoint.x_stop
+                y_start = datapoint.y_start
+                y_stop = datapoint.y_stop
+                fragment = datapoint.fragment
+
                 datapoint = self.reshape_datapoint(datapoint)
                 label, output0 = self._apply_forward(datapoint)
                 label, output0 = self.reshape_output0(label), self.reshape_output0(output0)
                 output1 = self.model1(output0.squeeze())
+
                 label = label.mean(dim=1).unsqueeze(1).to(self.device)
+
                 _loss = self.criterion1(output1, label)
                 self.trackers.update_test(_loss.item(), len(label))
                 outputs.append(output1.flatten().detach().cpu().numpy())
                 labels.append(label.flatten().detach().cpu().numpy())
-            outputs = np.concatenate(outputs)
-            labels = np.concatenate(labels)
+
+                x_centre = (x_start + x_stop) // 2
+                y_centre = (y_start + y_stop) // 2
+                xs.extend(x_centre.detach().numpy())
+                ys.extend(y_centre.detach().numpy())
+                fragments.extend(fragment.detach().numpy())
+
+            _outputs = np.concatenate(outputs)
+            _labels = np.concatenate(labels)
 
         self.model0.train()
         self.model1.train()
-        return outputs, labels
+        return _outputs, _labels, fragments, zip(xs, ys)
 
     def validate(self) -> 'JointTrainer':
-        outputs, labels = self.prediction(self.val_loader_iter)
-        predicted_labels_int = (outputs >= 0.5).astype(float)
-        score = f0_5_score(predicted_labels_int, labels)
+        _outputs, _labels, _fragments, _coords = self.prediction(self.val_loader_iter)
+        predicted_labels_int = (_outputs >= 0.5).astype(float)
+        score = f0_5_score(predicted_labels_int, _labels)
         self.trackers.log_score(score)
         self.trackers.update_lr(self.scheduler1.get_last_lr()[0])
         return self
 
     def inference(self):
-        outputs, labels = self.prediction(self.val_loader_iter)
-        predicted_labels_int = (outputs >= 0.5).astype(float)
-        score = f0_5_score(predicted_labels_int, labels)
-        return outputs, labels, score
+        _outputs, _labels, _fragments, _coords = self.prediction(self.test_loader_iter)
+        predicted_labels_int = (_outputs >= 0.5).astype(float)
+        return _outputs, predicted_labels_int, _coords, _fragments
 
     def save_model(self):
         self._save_model(self.model0, suffix='0')
@@ -178,7 +193,7 @@ if __name__ == '__main__':
     except RuntimeError:
         print('Failed to get public tensorboard URL')
 
-    TRAIN = False
+    TRAIN = True
     INFERENCE = True
 
     EPOCHS = 10
@@ -250,26 +265,65 @@ if __name__ == '__main__':
 
     train_dataset = get_dataset_regular_z(config, False, validation=False)
     val_dataset = get_dataset_regular_z(config_val, False, validation=True)
-    test_dataset = get_dataset_regular_z(config_inference, False, validation=True)
+    test_dataset = get_dataset_regular_z(config_inference, False, validation=False)
 
     start_time = time.time()
     with Track() as track, timer("Training"):
-        trainer = JointTrainer(train_dataset, val_dataset, track, config)
+        trainer = JointTrainer(config,
+                               track,
+                               train_dataset=train_dataset,
+                               val_dataset=val_dataset,
+                               test_dataset=test_dataset)
 
-        for i, train in enumerate(trainer):
-            train.zero_grad().forward0().forward1().loss().backward().step()
+        if TRAIN:
+            for i, train in enumerate(trainer):
+                train.zero_grad().forward0().forward1().loss().backward().step()
 
-            if i == 0:
-                continue
-            if time.time() - start_time >= save_interval_seconds:
-                train.save_model()
-                start_time = time.time()
-            if i % LOG_INTERVAL == 0:
-                train.trackers.log_train()
-            if i % VALIDATE_INTERVAL == 0:
-                train.validate()
-                train.trackers.log_test()
-        train.save_model()
+                if i == 0:
+                    continue
+                if time.time() - start_time >= save_interval_seconds:
+                    train.save_model()
+                    start_time = time.time()
+                if i % LOG_INTERVAL == 0:
+                    train.trackers.log_train()
+                if i % VALIDATE_INTERVAL == 0:
+                    train.validate()
+                    train.trackers.log_test()
+            train.save_model()
 
     if INFERENCE:
-        trainer.inference()
+        outputs, labels, coords, fragments = trainer.inference()
+        # Convert list of tuples into two lists
+        x_coord, y_coord = zip(*coords)
+
+        # Create DataFrame
+        df = pd.DataFrame({
+            'X': x_coord,
+            'Y': y_coord,
+            'labels': outputs,
+            'fragments': fragments
+        })
+
+        # Aggregate duplicates by taking the mean
+        # df_agg = df.groupby(['X', 'Y']).mean().reset_index()
+        for frag in (1, 2):
+            df_agg = df[df['fragments'] == frag]
+            # Pivot DataFrame to create grid
+            grid = df_agg.pivot(index='X', columns='Y', values='labels')
+
+            # NaN values represent coordinates without a value assigned in your data
+            # Replace NaN values with 0 (or any other value you prefer)
+            grid.fillna(0, inplace=True)
+
+            # NaN values represent coordinates without a value assigned in your data
+            # Replace NaN values with 0 (or any other value you prefer)
+            grid.fillna(0, inplace=True)
+
+            # Assuming 'grid' is your 2D array or DataFrame
+            plt.figure(figsize=(10, 10))  # Adjust size as needed
+            plt.imshow(grid, cmap='hot',
+                       interpolation='nearest')  # Change colormap as needed. Other options: 'cool', 'coolwarm', 'Greys', etc.
+            plt.colorbar(label='labels')  # Shows a color scale
+            plt.show()
+
+

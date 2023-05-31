@@ -1,7 +1,7 @@
 import json
 from abc import ABC, abstractmethod
 from itertools import repeat, chain, islice
-from typing import Generator, Any, Type, Tuple, Iterable
+from typing import Generator, Any, Type, Tuple, Iterable, Iterator
 
 import torch
 from torch import nn
@@ -15,7 +15,7 @@ class BaseTrainer(ABC):
 
     def __init__(self,
                  config: Configuration,
-                 trackers: Track = None,
+                 trackers: Track,
                  train_dataset: Any = None,
                  val_dataset: Any = None,
                  test_dataset: Any = None) -> None:
@@ -55,7 +55,7 @@ class BaseTrainer(ABC):
 
         return model_, optimizer, scheduler, criterion
 
-    def get_train_loader_iter(self):
+    def get_train_loader_iter(self) -> Iterator[Any]:
         self.config.loops_per_epoch = min(len(self.train_dataset), self.config.samples_max)
         self.total_loops = self.config.epochs * self.config.loops_per_epoch
         self.train_loader_iter = chain.from_iterable(repeat(self.train_dataset, self.config.epochs))

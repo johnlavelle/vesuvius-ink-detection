@@ -2,6 +2,9 @@ from vesuvius.datapoints import DatapointTuple, Datapoint
 from vesuvius.fragment_dataset import BaseDataset
 
 
+fragment_to_int = {'a': 1, 'b': 2}
+
+
 class SampleXYZ(BaseDataset):
 
     def get_datapoint(self, index: int) -> DatapointTuple:
@@ -13,6 +16,6 @@ class SampleXYZ(BaseDataset):
         # voxels = self.normalise_voxels(voxels)
         # voxels = voxels.expand_dims('Cin')
         s = current_slice
-        dp = Datapoint(voxels, int(self.label_operation(label)), self.ds.fragment,
+        dp = Datapoint(voxels, int(self.label_operation(label)), fragment_to_int[self.ds.fragment],
                        s['x'].start, s['x'].stop, s['y'].start, s['y'].stop, s['z'].start, s['z'].stop)
         return dp.to_namedtuple()
