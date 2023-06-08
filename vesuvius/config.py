@@ -19,7 +19,7 @@ class ConfigurationModel:
     model: Module = None
     learning_rate: float = 0.03
     l1_lambda: float = 0
-    criterion: Module = None
+    criterion: Union[Module, Callable] = None
     optimizer_scheduler_cls: Type[optimisers.OptimiserScheduler] = optimisers.SGDOneCycleLR
 
     optimizer_scheduler: Union[optimisers.OptimiserScheduler, None] = field(init=False)

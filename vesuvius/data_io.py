@@ -267,7 +267,7 @@ def rechunk_cached(ds: xr.Dataset) -> xr.Dataset:
     variables = list(ds.coords)
     variables.append('label')
     desired_chunk_sizes = {key: {'sample': len(ds.sample)} for key in variables}
-    desired_chunk_sizes['voxels'] = {'sample': 16}
+    desired_chunk_sizes['voxels'] = {'sample': 1}
     del desired_chunk_sizes['sample']
 
     # Check if the dataset already has the desired chunk sizes

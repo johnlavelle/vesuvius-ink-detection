@@ -70,19 +70,19 @@ class HybridBinaryClassifier(nn.Module):
         self.linear1 = nn.Linear(1024, 4)
 
         # FCN part for scalar input
-        self.fc_scalar = nn.Linear(1, 4)
-        self.bn_scalar = nn.BatchNorm1d(4)
+        self.fc_scalar = nn.Linear(1, 2)
+        # self.bn_scalar = nn.BatchNorm1d(4)
         # self.dropout_scalar = nn.Dropout(self.dropout_rate)
 
         # Combined layers (initialized later)
-        self.fc_combined1 = nn.Linear(8, 4)
-        self.bn_combined1 = nn.BatchNorm1d(4)
+        self.fc_combined1 = nn.Linear(5, 3)
+        # self.bn_combined1 = nn.BatchNorm1d(4)
 
-        self.fc_combined2 = nn.Linear(4, 2)
+        self.fc_combined2 = nn.Linear(3, 1)
 
         # self.dropout_combined = nn.Dropout(self.dropout_rate)
 
-        self.fc_combined3 = nn.Linear(2, 1)
+        # self.fc_combined3 = nn.Linear(2, 1)
         self.sigmoid = nn.Sigmoid()
 
     def forward(self, x: torch.Tensor, scalar_input: torch.Tensor):
@@ -110,23 +110,23 @@ class HybridBinaryClassifier(nn.Module):
         x = F.relu(x)
 
         # # FCN part
-        scalar_input = self.fc_scalar(scalar_input)
-        # scalar_input = self.bn_scalar(scalar_input)
-        scalar_input = F.relu(scalar_input)
+        # scalar_input = self.fc_scalar(scalar_input)
+        # # scalar_input = self.bn_scalar(scalar_input)
+        # scalar_input = F.relu(scalar_input)
 
         # Combine CNN and FCN outputs
         combined = torch.cat((x, scalar_input), dim=1)
 
         # Combined layers
         x = self.fc_combined1(combined)
-        x = self.bn_combined1(x)
+        # x = self.bn_combined1(x)
         x = F.relu(x)
 
         x = self.fc_combined2(x)
         x = F.relu(x)
 
         # x = self.dropout_combined(x)
-        x = self.fc_combined3(x)
+        # x = self.fc_combined3(x)
 
         return self.sigmoid(x)
 

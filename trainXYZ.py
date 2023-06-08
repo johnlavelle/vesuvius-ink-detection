@@ -2,7 +2,9 @@ import copy
 import pprint
 
 import dask
+import numpy as np
 import torch
+from torch.nn.functional import binary_cross_entropy_with_logits
 
 from src import tensorboard_access
 from vesuvius import ann
@@ -22,6 +24,31 @@ pp = pprint.PrettyPrinter(indent=4)
 dask.config.set(scheduler='synchronous')
 
 
+def gaussian(x, mu, sigma):
+    y = torch.exp(-(x - mu)**2 / (2 * sigma**2))
+    return y / torch.max(y)
+
+
+def interpolate(start, end, ratio):
+    """
+    This function interpolates between 'start' and 'end'
+    based on the given ratio.
+
+    Args:
+    start (float): The starting value.
+    end (float): The ending value.
+    ratio (float): The ratio to interpolate between start and end.
+                   Should be between 0 and 1.
+
+    Returns:
+    float: The interpolated value.
+    """
+    if ratio < 0 or ratio > 1:
+        raise ValueError("The ratio must be between 0 and 1.")
+
+    return start + (end - start) * ratio
+
+
 class TrainerXYZ(BaseTrainer):
 
     def __init__(self, *args, **kwargs) -> None:
@@ -36,12 +63,18 @@ class TrainerXYZ(BaseTrainer):
         scalar = (datapoint.z_start / (65 - self.config.box_width_z)).view(-1, 1).float()
         return self.model0(datapoint.voxels.to(self.device), scalar.to(self.device))
 
+    def get_loss_weight(self, datapoint):
+        sigma = interpolate(2, 100, self.trackers.incrementer.loop / self.total_loops)
+        weight = gaussian(datapoint.z_start, mu=32, sigma=sigma)
+        return weight.view(-1, 1).to(self.device)
+
     def validate(self) -> 'TrainerXYZ':
         self.model0.eval()
         with torch.no_grad():
             for datapoint_test in self.val_loader_iter:
                 outputs = self._apply_forward(datapoint_test)
-                val_loss = self.criterion0(outputs, datapoint_test.label.float().to(self.device))
+                weight = self.get_loss_weight(datapoint_test)
+                val_loss = self.criterion0(outputs, datapoint_test.label.float().to(self.device), weight=weight)
                 batch_size = len(datapoint_test.label)
                 self.trackers.logger_test_loss.update(val_loss.item(), batch_size)
         self.trackers.log_test()
@@ -55,8 +88,8 @@ class TrainerXYZ(BaseTrainer):
 
     def loss(self) -> 'TrainerXYZ':
         target = self.datapoint.label.float().to(self.device)
-
-        base_loss = self.criterion0(self.outputs, target)
+        weight = self.get_loss_weight(self.datapoint)
+        base_loss = self.criterion0(self.outputs, target, weight=weight)
         l1_regularization = torch.norm(self.model0.fc_scalar.weight, p=1)
         self.loss_value = base_loss + (self.config.model0.l1_lambda * l1_regularization)
 
@@ -86,7 +119,7 @@ if __name__ == '__main__':
     dask.config.set(scheduler='synchronous')
     print('Tensorboard URL: ', tensorboard_access.get_public_url(), '\n')
 
-    EPOCHS = 1000
+    EPOCHS = 100
     SAVE_INTERVAL = 1_000_000
     VALIDATE_INTERVAL = 5_000
     LOG_INTERVAL = 250
@@ -98,19 +131,18 @@ if __name__ == '__main__':
     #     reset_cache_epoch_interval=RESET_CACHE_EPOCH_INTERVAL)
 
     for alpha, gamma in [
-        (1, 0),
-        (0.9, 0.1),
-        (0.9, 2),
-        (0.9, 4),
-        (0.75, 0),
-        (0.75, 0.1),
-        (0.75, 2),
-        (0.75, 4)
+        (1, 0)
+        # (.95, 0.5),
+        # (.6, 0.25),
+        # (.25, 2),
+        # (.8, 3),
+        # (0.9, 0.75),
     ]:
 
         config_model0 = ConfigurationModel(
             model=models.HybridBinaryClassifier(dropout_rate=0.1),
-            criterion=FocalLoss(alpha, gamma),
+            # criterion=FocalLoss(alpha, gamma),
+            criterion=binary_cross_entropy_with_logits,
             l1_lambda=0,
             # l1_lambda=0.00000001,
             learning_rate=0.03)
