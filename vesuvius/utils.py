@@ -11,11 +11,10 @@ from skimage.measure import find_contours
 from xarray import DataArray, Dataset
 
 
-def normalise_images(data_array: DataArray) -> DataArray:
+def voxel_stats(data_array: DataArray) -> Tuple[DataArray, DataArray]:
     # # normalize across the z layers
-    ds_z_mean = data_array.mean(dim=['x', 'y'], skipna=True)
-    ds_z_std = data_array.std(dim=['x', 'y'], skipna=True)
-    data_array = (data_array - ds_z_mean) / ds_z_std
+    ds_z_mean = data_array.mean(dim=['x', 'y'], skipna=True).compute()
+    ds_z_std = data_array.std(dim=['x', 'y'], skipna=True).compute()
     # data_array.attrs['ds_z_mean'] = ds_z_mean
     # data_array.attrs['ds_z_std'] = ds_z_std
 
@@ -26,7 +25,7 @@ def normalise_images(data_array: DataArray) -> DataArray:
     # dataset['images'].attrs['mean'] = ds_mean.item()
     # dataset['images'].attrs['std'] = ds_std.item()
 
-    return data_array
+    return ds_z_mean, ds_z_std
 
 
 def normalise_voxels(voxels) -> DataArray:

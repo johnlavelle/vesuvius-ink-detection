@@ -55,7 +55,7 @@ def create_dataset(cache_dir, cfg, worker_init, zarr_dir):
     train_loader = get_train_dataset(cfg, worker_init=worker_init)
     saver = SaveModel(cache_dir)
     # Save the output of the data loader to a zarr file
-    total = cfg.samples_max // cfg.batch_size
+    total = len(train_loader)
     running_sample_len = 0
     datapoint: Datapoint
     for i, datapoint in tqdm(enumerate(train_loader),
@@ -89,7 +89,7 @@ def create_dataset(cache_dir, cfg, worker_init, zarr_dir):
     saver.config(cfg)
 
 
-def cached_data_loader(cfg: Configuration, reset_cache: bool = False, test_data=False, worker_init='diff') -> Dataset:
+def cached_data_loader(cfg: Configuration, reset_cache: bool = False, val_data=False, worker_init='diff') -> Dataset:
     cache_dir = os.path.join(cfg.prefix, f'data_cache_{cfg.suffix_cache}')
     zarr_dir = os.path.join(cache_dir, f'cache.zarr')
 
@@ -104,19 +104,19 @@ def cached_data_loader(cfg: Configuration, reset_cache: bool = False, test_data=
 
         create_dataset(cache_dir, cfg, worker_init, zarr_dir)
 
-    ds = get_dataset(zarr_dir, fragment=cfg.test_box_fragment, hold_back_box=cfg.test_box, test_data=test_data)
-    return CachedDataset(ds, transformers=cfg.transformers, group_size=cfg.batch_size, seed=cfg.seed)
+    ds = get_dataset(zarr_dir, fragment=cfg.test_box_fragment, hold_back_box=cfg.test_box, test_data=val_data)
+    return CachedDataset(ds, transformers=cfg.transformers, group_size=cfg.batch_size)
 
 
 def get_train_dataset(cfg: Configuration,
                       cached=False,
                       reset_cache=False,
                       worker_init='diff',
-                      test_data=False) -> Union[DataLoader, Dataset]:
+                      val_data=False) -> Union[DataLoader, Dataset]:
     if reset_cache and not cached:
         raise ValueError("reset_cache can only be True if cached is also True")
     if cached:
-        return cached_data_loader(cfg, reset_cache, test_data=test_data, worker_init=worker_init)
+        return cached_data_loader(cfg, reset_cache, val_data=val_data, worker_init=worker_init)
     else:
         return standard_data_loader(cfg, worker_init=worker_init)
 
@@ -162,7 +162,7 @@ def get_dataset_regular_z(cfg: dataclass, force_cache_reset, validation=False) -
             return None
 
     cfg.collate_fn = collate_catch_errs
-    return get_train_dataset(cfg, cached=True, reset_cache=force_cache_reset, worker_init='same', test_data=validation)
+    return get_train_dataset(cfg, cached=True, reset_cache=force_cache_reset, worker_init='same', val_data=validation)
 
 
 def get_train_datasets(cfg, epochs, cached_data, force_cache_reset, reset_cache_epoch_interval) \

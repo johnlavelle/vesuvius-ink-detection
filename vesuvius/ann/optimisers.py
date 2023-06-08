@@ -10,11 +10,19 @@ class OptimiserScheduler(ABC):
         self.learning_rate = learning_rate
         self.total_steps = total_steps
 
+        self.optimizer = self.optimizer()
+        self.scheduler = self.scheduler()
+
     def optimizer(self) -> optim.Optimizer:
         return optim.Adam(self.model.parameters(), lr=self.learning_rate)
 
     def scheduler(self) -> optim.lr_scheduler:
         ...
+
+    def step(self):
+        self.optimizer.step()
+        self.scheduler.step()
+        self.optimizer.zero_grad()
 
     def as_dict(self) -> Dict[str, Any]:
         return {
@@ -27,7 +35,7 @@ class OptimiserScheduler(ABC):
 class SGDOneCycleLR(OptimiserScheduler):
 
     def scheduler(self) -> optim.lr_scheduler:
-        return optim.lr_scheduler.OneCycleLR(self.optimizer(),
+        return optim.lr_scheduler.OneCycleLR(self.optimizer,
                                              max_lr=self.learning_rate,
                                              div_factor=3,
                                              total_steps=self.total_steps)
@@ -40,7 +48,7 @@ class SGDOneCycleLR(OptimiserScheduler):
 class AdamOneCycleLR(OptimiserScheduler):
 
     def scheduler(self) -> optim.lr_scheduler:
-        return optim.lr_scheduler.OneCycleLR(self.optimizer(),
+        return optim.lr_scheduler.OneCycleLR(self.optimizer,
                                              max_lr=self.learning_rate,
                                              div_factor=3,
                                              total_steps=self.total_steps)

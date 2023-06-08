@@ -32,7 +32,7 @@ class BaseTrainer(ABC):
         self.batch_size = None
         self.total_loops = None
         self.os = None
-        self.optimizer0, self.scheduler0, self.criterion0 = None, None, None
+        self.criterion0 = None
 
         if self.train_dataset:
             self.train_loader_iter = self.get_train_loader_iter()
@@ -46,14 +46,12 @@ class BaseTrainer(ABC):
 
     def setup_model(self, model_object):
         model_ = model_object.model.to(self.device)
-        os = model_object.optimizer_scheduler
-        optimizer, scheduler, criterion = os.optimizer(), os.scheduler(), model_object.criterion
 
         if torch.cuda.device_count() >= 2:
             model_ = nn.DataParallel(model_)
             print('Using DataParallel for training.')
 
-        return model_, optimizer, scheduler, criterion
+        return model_, model_object.optimizer_scheduler, model_object.criterion
 
     def get_train_loader_iter(self) -> Iterator[Any]:
         self.config.loops_per_epoch = min(len(self.train_dataset), self.config.samples_max)
@@ -62,7 +60,8 @@ class BaseTrainer(ABC):
         return islice(self.train_loader_iter, self.total_loops)
 
     def get_val_loader_iter(self) -> Iterable:
-        return list(islice(self.val_dataset, min(len(self.val_dataset), self.config.validation_steps)))
+        loops = min(len(self.val_dataset), self.config.validation_steps)
+        return list(islice(self.val_dataset, loops))
 
     def get_test_loader_iter(self) -> Iterable:
         return self.test_dataset
@@ -124,8 +123,9 @@ class BaseTrainer(ABC):
     def __next__(self) -> 'BaseTrainer':
         if self.trackers.incrementer.loop >= self.total_loops:
             raise StopIteration
+        datapoint_old = self.datapoint
         self.datapoint = next(self.train_loader_iter)
-        assert len(self.datapoint.fxy_idx) == self.config.batch_size
+        # assert len(self.datapoint.fxy_idx) == self.config.batch_size
         self.trackers.increment(len(self.datapoint.label))
         return self
 

@@ -105,12 +105,14 @@ class CropBoxRegular(BaseCropBox):
         seed = 98  # Override seed
         rng = np.random.default_rng(seed) if seed is not None else None
         self.sampler = list(self.xyz_sampler(self.l_bounds, self.u_bounds, self.stride_xy, self.stride_z, rng))
+        self.sampler_iter = iter(self.sampler)
+        self.length = len(self.sampler)
 
     @staticmethod
     def xyz_sampler(l_bounds_xyz, u_bounds_xyz, stride_xy, stride_z, rng) -> Iterator[Tuple[int, int, int]]:
-        xs = np.arange(l_bounds_xyz[0], u_bounds_xyz[0], stride_xy)
+        xs = np.arange(l_bounds_xyz[0], u_bounds_xyz[1], stride_xy)
         xs_rnd = rng.choice(xs, size=len(xs), replace=False)
-        ys = np.arange(l_bounds_xyz[0], u_bounds_xyz[0], stride_xy)
+        ys = np.arange(l_bounds_xyz[0], u_bounds_xyz[1], stride_xy)
         ys_rnd = rng.choice(ys, size=len(xs), replace=False)
         if rng is None:
             xs_rnd = xs
@@ -121,14 +123,14 @@ class CropBoxRegular(BaseCropBox):
                     yield x, y, z
 
     def get_sample(self) -> Tuple[int, int, int]:
-        return self.sampler.pop(0)
+        return next(self.sampler_iter)
 
     def __getitem__(self, item) -> Tuple[int, int, int, int, int, int]:
         x, y, z = self.sampler[item]
         return x, x + self.width_xy - 1, y, y + self.width_xy - 1, z, z + self.width_z - 1
 
     def __len__(self):
-        return len(self.sampler)
+        return self.length
 
 
 class BaseVolumeSampler(ABC):

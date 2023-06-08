@@ -98,6 +98,8 @@ class BaseDataset(ABC, Dataset):
         else:
             return self.max_iterations
 
+    # def __len__(self) -> int:
+    #     return len(self.sampler)
 
 # class TestVolumeDataset(BaseDataset):
 #     """
@@ -202,11 +204,18 @@ class BaseDataset(ABC, Dataset):
 
 
 class CachedDataset(Dataset):
-    def __init__(self, dataset: xr.Dataset, transformers=None, group_size=32, seed=None):
+    def __init__(self, dataset: xr.Dataset, transformers=None, group_size=32):
         self.transformers = transformers
         self.group_size = group_size
         self.ds = dataset
-        self.seed = seed
+
+        sample = self.ds['sample'].values
+        np.random.shuffle(sample)
+        self.ds['sample'] = ('sample', sample)
+        self.ds = self.ds.sortby('sample')
+
+        self.ds = self.ds.isel(sample=slice(0, 10_000))
+        self.ds = self.ds.load()
 
         # Remove last group if length != group_size
         self.ds = self.ds.isel(sample=slice(0, len(self.ds.sample) - len(self.ds.sample) % group_size))
@@ -215,17 +224,10 @@ class CachedDataset(Dataset):
         self.ds = self.ds.assign_coords(group=groups)
         self.ds_grp = self.ds.groupby('group')
 
-        self.indexes = list(range(len(self.ds_grp)))
-        self.shuffle()
-
-    def shuffle(self):
-        random.seed(self.seed)  # Set the seed here
-        random.shuffle(self.indexes)
-
     def __getitem__(self, index: int) -> DatapointTuple:
         if index >= self.__len__():
             raise IndexError("Dataset exhausted")
-        ds = self.ds_grp[self.indexes[index]]  # Use shuffled index
+        ds = self.ds_grp[index]  # Use shuffled index
         dp = Datapoint(ds['voxels'],
                        ds['label'],
                        ds['fragment'],

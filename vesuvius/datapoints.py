@@ -77,6 +77,6 @@ class Datapoint:
 
     def validate_data(self):
         try:
-            assert np.isfinite(self.voxels).all().values.item(), 'Non finite number in voxels'
+            assert np.isfinite(self.voxels).all(), 'Non finite number in voxels'
         except AssertionError as err:
             raise ValueError(err)

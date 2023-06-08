@@ -1,10 +1,10 @@
 {
     "info": "",
-    "samples_max": 160000,
+    "samples_max": 1600,
     "volume_dataset_cls": "SampleXYZ",
     "crop_box_cls": "CropBoxSobol",
     "label_fn": "centre_pixel",
-    "transformers": "Compose([RandomFlipTransform])",
+    "transformers": "Compose([RandomFlipTransform, NormalizeVolume])",
     "batch_size": 32,
     "fragments": [
         1,
@@ -25,7 +25,6 @@
     "stride_z": null,
     "balance_ink": true,
     "shuffle": true,
-    "group_pixels": false,
     "validation_steps": 100,
     "num_workers": 10,
     "prefix": "/data/kaggle/input/vesuvius-challenge-ink-detection/train/",
@@ -37,7 +36,7 @@
             "class": "HybridBinaryClassifier",
             "params": {
                 "dropout_rate": 0.1,
-                "width_multiplier": 4
+                "width": 4
             }
         },
         "learning_rate": 0.03,
@@ -49,10 +48,10 @@
             "params": {
                 "model": "HybridBinaryClassifier",
                 "learning_rate": 0.03,
-                "total_steps": 500000
+                "total_steps": 1600
             }
         },
-        "_total_loops": 500000
+        "_total_loops": 1600
     },
     "model1": {
         "model": null,
@@ -65,19 +64,20 @@
             "params": {
                 "model": "NoneType",
                 "learning_rate": 0.03,
-                "total_steps": 500000
+                "total_steps": 1600
             }
         },
-        "_total_loops": 500000
+        "_total_loops": 1600
     },
-    "epochs": 100,
+    "epochs": 1,
     "accumulation_steps": null,
+    "seed": 648,
     "performance_dict": {
-        "loss/train": 0.014748748608234555,
+        "loss/train": 0.01505389233881777,
         "loss/test": 0.0,
-        "steps": 16000000
+        "steps": 51200
     },
     "extra_dict": null,
-    "_loops_per_epoch": 5000,
-    "_epochs": 100
+    "_loops_per_epoch": 1600,
+    "_epochs": 1
 }

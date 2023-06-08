@@ -1,5 +1,7 @@
 import copy
 import time
+import random
+
 from typing import Tuple, Iterable, List
 
 import numpy as np
@@ -41,25 +43,20 @@ class JointTrainer(BaseTrainer):
 
         pretty_print_dataclass(config)
 
-        self.model0, self.optimizer0, self.scheduler0, self.criterion0 = self.setup_model(self.config.model0)
-        self.model1, self.optimizer1, self.scheduler1, self.criterion1 = self.setup_model(self.config.model1)
+        self.model0, self.optimizer_scheduler0, self.criterion0 = self.setup_model(self.config.model0)
+        self.model1, self.optimizer_scheduler1, self.criterion1 = self.setup_model(self.config.model1)
 
     def _apply_forward(self, datapoint) -> Tuple[torch.Tensor, torch.Tensor]:
         voxels = datapoint.voxels
-        scalar = datapoint.label
+        scalar = (datapoint.z_start / (65 - self.config.box_sub_width_z)).view(-1, 1).float()
         try:
-            return scalar, self.model0(voxels.to(self.device), scalar.to(self.device))
+            return datapoint.label, self.model0(voxels.to(self.device), scalar.to(self.device))
         except RuntimeError as err:
             raise err
 
     @staticmethod
     def _assert_all_values_are_one_or_zero(arr: torch.Tensor):
         assert torch.all(torch.logical_or(arr == 0.0, arr == 1.0)), "Not all values are 1.0 or 0.0"
-
-    def zero_grad(self):
-        self.optimizer0.zero_grad()
-        self.optimizer1.zero_grad()
-        return self
 
     def forward0(self) -> 'JointTrainer':
         self.model0.train()
@@ -111,10 +108,8 @@ class JointTrainer(BaseTrainer):
         return self
 
     def step(self) -> 'JointTrainer':
-        self.optimizer0.step()
-        self.scheduler0.step()
-        self.optimizer1.step()
-        self.scheduler1.step()
+        self.optimizer_scheduler0.step()
+        self.optimizer_scheduler1.step()
         return self
 
     def prediction(self, data_iter: Iterable) -> Tuple[np.ndarray, np.ndarray, List, List]:
@@ -122,7 +117,7 @@ class JointTrainer(BaseTrainer):
         self.model1.eval()
 
         with torch.no_grad():
-            labels, outputs, xs, ys, fragments = [], [], [], [], []
+            _labels, _outputs, _xs, _ys, _fragments = [], [], [], [], []
             for datapoint in data_iter:
                 x_start = datapoint.x_start
                 x_stop = datapoint.x_stop
@@ -136,35 +131,38 @@ class JointTrainer(BaseTrainer):
                 output1 = self.model1(output0.squeeze())
 
                 label = label.mean(dim=1).unsqueeze(1).to(self.device)
-
                 _loss = self.criterion1(output1, label)
                 self.trackers.update_test(_loss.item(), len(label))
-                outputs.append(output1.flatten().detach().cpu().numpy())
-                labels.append(label.flatten().detach().cpu().numpy())
+                _outputs.append(output1.flatten().detach().cpu().numpy())
+                _labels.append(label.flatten().detach().cpu().numpy())
 
                 x_centre = (x_start + x_stop) // 2
                 y_centre = (y_start + y_stop) // 2
-                xs.extend(x_centre.detach().numpy())
-                ys.extend(y_centre.detach().numpy())
-                fragments.extend(fragment.detach().numpy())
+                _xs.extend(x_centre.detach().numpy())
+                _ys.extend(y_centre.detach().numpy())
+                _fragments.extend(fragment.detach().numpy())
 
-            _outputs = np.concatenate(outputs)
-            _labels = np.concatenate(labels)
+        _outputs = np.concatenate(_outputs)
+        _labels = np.concatenate(_labels)
 
         self.model0.train()
         self.model1.train()
-        return _outputs, _labels, fragments, zip(xs, ys)
+
+        return _outputs, _labels, _fragments, zip(_xs, _ys)
 
     def validate(self) -> 'JointTrainer':
         _outputs, _labels, _fragments, _coords = self.prediction(self.val_loader_iter)
+
         predicted_labels_int = (_outputs >= 0.5).astype(float)
         score = f0_5_score(predicted_labels_int, _labels)
         self.trackers.log_score(score)
-        self.trackers.update_lr(self.scheduler1.get_last_lr()[0])
+        self.trackers.update_lr(self.optimizer_scheduler0.optimizer.param_groups[0]['lr'])
         return self
 
     def inference(self):
         _outputs, _labels, _fragments, _coords = self.prediction(self.test_loader_iter)
+        plt.hist(_outputs, color='r')
+        plt.show()
         predicted_labels_int = (_outputs >= 0.5).astype(float)
         return _outputs, predicted_labels_int, _coords, _fragments
 
@@ -173,11 +171,21 @@ class JointTrainer(BaseTrainer):
         self._save_model(self.model1, suffix='1')
 
     def reshape_datapoint(self, datapoint):
-        kwargs = {k: v.repeat_interleave(self.num_z_vols, dim=0) for k, v in datapoint._asdict().items() if
+
+        datapoint_dict = datapoint._asdict()
+
+        kwargs = {k: v.repeat_interleave(self.num_z_vols, dim=0) for k, v in datapoint_dict.items() if
                   k != 'voxels'}
+
+        kwargs['z_start'] = torch.tensor(np.arange(0, self.config.box_width_z, self.config.box_sub_width_z)).repeat(self.config.batch_size)
+        kwargs['z_stop'] = torch.tensor(np.array(list(min(e + 13 - 1, 64) for e in datapoint_dict['z_start']))).repeat(self.config.batch_size)
+
         kwargs['label'] = kwargs['label'].float()
         kwargs['voxels'] = datapoint.voxels.reshape(self.batch_size * self.num_z_vols,
-                                                    1, config.box_sub_width_z, 91, 91)
+                                                    1, config.box_sub_width_z, config.box_width_xy, config.box_width_xy)
+        # rnd = np.random.uniform(-5, 5)
+        # kwargs['z_start'] = kwargs['z_start'] + rnd)
+        # kwargs['z_stop'] = 0*(kwargs['z_stop'] + rnd)
         return DatapointTuple(**kwargs)
 
     def __next__(self):
@@ -195,38 +203,39 @@ if __name__ == '__main__':
 
     TRAIN = True
     INFERENCE = True
+    STORED_CONFIG = False
 
     EPOCHS = 10
-    TOTAL_STEPS = 1_000_000
+    TOTAL_STEPS = 10_000_000
     SAVE_INTERVAL_MINUTES = 30
-    VALIDATE_INTERVAL = 100
-    LOG_INTERVAL = 10
-    PRETRAINED_MODEL0 = False
-    BOX_SUB_WIDTH_Z = 5
+    VALIDATE_INTERVAL = 1_000
+    LOG_INTERVAL = 250
+    PRETRAINED_MODEL0 = True
+    BOX_SUB_WIDTH_Z = 13
     LEARNING_RATE = 0.03
 
     save_interval_seconds = SAVE_INTERVAL_MINUTES * 60
 
-    if INFERENCE:
-        _config = Configuration.from_dict('configs/Joint/')
-        assert _config.box_sub_width_z == BOX_SUB_WIDTH_Z
+    if STORED_CONFIG:
+        _config = Configuration.from_dict('output/runs/2023-06-05_20-47-56')
+        # assert _config.box_sub_width_z == BOX_SUB_WIDTH_Z
         config_model0 = _config.model0
-        config_model0.model.requires_grad = False
-        config_model1 = _config.model1
-        config_model1.model.requires_grad = False
+        config_model0.model.requires_grad = True
+        # config_model1 = _config.model1
+        # config_model1.model.requires_grad = False
     else:
         config_model0 = ConfigurationModel(
-            model=models.HybridBinaryClassifierShallow(dropout_rate=0.2, width_multiplier=1),
+            model=models.HybridBinaryClassifier(dropout_rate=0.1),
             optimizer_scheduler_cls=ann.optimisers.AdamOneCycleLR,
             learning_rate=LEARNING_RATE,
             l1_lambda=0.0
         )
 
     config_model1 = ConfigurationModel(
-        model=models.StackingClassifierShallow(13, 1),
+        model=models.StackingClassifierShallow(5, 1),
         optimizer_scheduler_cls=ann.optimisers.AdamOneCycleLR,
         learning_rate=LEARNING_RATE,
-        l1_lambda=0.0001,
+        l1_lambda=0.00001,
         criterion=BCEWithLogitsLoss()
     )
 
@@ -241,10 +250,11 @@ if __name__ == '__main__':
         transformers=ann.transforms.transform_train,
         shuffle=False,
         balance_ink=True,
-        batch_size=32,
+        batch_size=16,
         box_width_z=65,
+        box_width_xy=65,
         box_sub_width_z=BOX_SUB_WIDTH_Z,
-        stride_xy=91,
+        stride_xy=3 * 65 // 4,
         stride_z=65,
         num_workers=1,
         validation_steps=100,
@@ -254,12 +264,16 @@ if __name__ == '__main__':
         fragments=(1, 2, 3)
     )
 
+    random.seed(config.seed)  # Set the seed here
+
     config_val = copy.copy(config)
     config_val.transformers = ann.transforms.transform_val
 
     config_inference = copy.copy(config)
     config_inference.prefix = "/data/kaggle/input/vesuvius-challenge-ink-detection/test/"
     config_inference.fragments = ('a', 'b')
+    # config_inference.prefix = "/data/kaggle/input/vesuvius-challenge-ink-detection/train/"
+    # config_inference.fragments = (1, 2)
     config_inference.balance_ink = False
     config_inference.validation_steps = 1_000_000
 
@@ -277,7 +291,7 @@ if __name__ == '__main__':
 
         if TRAIN:
             for i, train in enumerate(trainer):
-                train.zero_grad().forward0().forward1().loss().backward().step()
+                train.forward0().forward1().loss().backward().step()
 
                 if i == 0:
                     continue
@@ -300,7 +314,7 @@ if __name__ == '__main__':
         df = pd.DataFrame({
             'X': x_coord,
             'Y': y_coord,
-            'labels': outputs,
+            'outputs': outputs,
             'fragments': fragments
         })
 
@@ -309,21 +323,16 @@ if __name__ == '__main__':
         for frag in (1, 2):
             df_agg = df[df['fragments'] == frag]
             # Pivot DataFrame to create grid
-            grid = df_agg.pivot(index='X', columns='Y', values='labels')
+            grid = df_agg.pivot(index='X', columns='Y', values='outputs')
 
-            # NaN values represent coordinates without a value assigned in your data
-            # Replace NaN values with 0 (or any other value you prefer)
-            grid.fillna(0, inplace=True)
-
-            # NaN values represent coordinates without a value assigned in your data
-            # Replace NaN values with 0 (or any other value you prefer)
-            grid.fillna(0, inplace=True)
+            grid.fillna(-1, inplace=True)
 
             # Assuming 'grid' is your 2D array or DataFrame
             plt.figure(figsize=(10, 10))  # Adjust size as needed
-            plt.imshow(grid, cmap='hot',
-                       interpolation='nearest')  # Change colormap as needed. Other options: 'cool', 'coolwarm', 'Greys', etc.
+            plt.imshow(grid.transpose(), cmap='hot',
+                       interpolation='none')  # Change colormap as needed. Other options: 'cool', 'coolwarm', 'Greys', etc.
             plt.colorbar(label='labels')  # Shows a color scale
             plt.show()
 
-
+            df_agg['outputs'].plot.hist(bins=50)
+            plt.show()

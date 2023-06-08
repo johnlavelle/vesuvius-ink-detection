@@ -26,7 +26,7 @@
     "balance_ink": true,
     "shuffle": false,
     "validation_steps": 100,
-    "num_workers": 5,
+    "num_workers": 1,
     "prefix": "/data/kaggle/input/vesuvius-challenge-ink-detection/train/",
     "suffix_cache": "regular",
     "collate_fn": "collate_catch_errs",
@@ -48,10 +48,10 @@
             "params": {
                 "model": "HybridBinaryClassifierShallow",
                 "learning_rate": 0.03,
-                "total_steps": 118
+                "total_steps": 3540
             }
         },
-        "_total_loops": 118
+        "_total_loops": 3540
     },
     "model1": {
         "model": {
@@ -70,20 +70,20 @@
             "params": {
                 "model": "StackingClassifierShallow",
                 "learning_rate": 0.03,
-                "total_steps": 118
+                "total_steps": 3540
             }
         },
-        "_total_loops": 118
+        "_total_loops": 3540
     },
-    "epochs": 1,
+    "epochs": 30,
     "accumulation_steps": 1,
     "seed": 648,
     "performance_dict": {
-        "loss/train": 0.5200338153278127,
+        "loss/train": 0.5097446793164963,
         "loss/test": 0.0,
-        "steps": 3776
+        "steps": 113280
     },
     "extra_dict": null,
     "_loops_per_epoch": 118,
-    "_epochs": 1
+    "_epochs": 30
 }

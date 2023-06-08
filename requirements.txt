@@ -1,19 +1,20 @@
 click
-dask
+dask[complete]
 matplotlib
 numpy
 pandas
+psutil
 pytest
 rasterio
 rioxarray
 scipy
 shapely
 tblib
-tensorboard-data-server
 tensorboard
-tensorflow-estimator
-tensorflow-io-gcs-filesystem
-tensorflow
+# tensorboard-data-server
+# tensorflow
+# tensorflow-estimator
+# tensorflow-io-gcs-filesystem
 torch
 torcharrow
 torchaudio
@@ -23,3 +24,4 @@ torchsummary
 tqdm
 xarray
 zarr
+scikit-image

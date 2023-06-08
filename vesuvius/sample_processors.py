@@ -16,6 +16,7 @@ class SampleXYZ(BaseDataset):
         # voxels = self.normalise_voxels(voxels)
         # voxels = voxels.expand_dims('Cin')
         s = current_slice
-        dp = Datapoint(voxels, int(self.label_operation(label)), fragment_to_int[self.ds.fragment],
+        fragment = fragment_to_int[self.ds.fragment] if isinstance(self.ds.fragment, str) else self.ds.fragment
+        dp = Datapoint(voxels, int(self.label_operation(label)), fragment,
                        s['x'].start, s['x'].stop, s['y'].start, s['y'].stop, s['z'].start, s['z'].stop)
         return dp.to_namedtuple()

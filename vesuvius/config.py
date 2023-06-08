@@ -6,7 +6,7 @@ import warnings
 from dataclasses import dataclass, field, asdict
 from typing import Union, Optional, Callable, Iterable, Tuple, Any, Type, Dict
 
-from torch.nn import Module
+from torch.nn import BCEWithLogitsLoss
 
 from vesuvius.ann import optimisers
 from vesuvius.ann.transforms import *
@@ -22,7 +22,7 @@ class ConfigurationModel:
     criterion: Module = None
     optimizer_scheduler_cls: Type[optimisers.OptimiserScheduler] = optimisers.SGDOneCycleLR
 
-    optimizer_scheduler: optimisers.OptimiserScheduler = field(init=False)
+    optimizer_scheduler: Union[optimisers.OptimiserScheduler, None] = field(init=False)
     _total_loops: int = field(init=False, default=0)
 
     def __post_init__(self):
@@ -39,7 +39,10 @@ class ConfigurationModel:
         self.update_optimizer_scheduler()
 
     def update_optimizer_scheduler(self):
-        self.optimizer_scheduler = self.optimizer_scheduler_cls(self.model, self.learning_rate, self.total_loops)
+        if self.total_loops == 0:
+            self.optimizer_scheduler = None
+        else:
+            self.optimizer_scheduler = self.optimizer_scheduler_cls(self.model, self.learning_rate, self.total_loops)
 
     @classmethod
     def from_dict(cls, config_dict: Dict[str, Any], model_path: Optional[str] = None) -> "ConfigurationModel":
@@ -53,6 +56,9 @@ class ConfigurationModel:
         model_class = import_module("vesuvius.ann.models").__getattribute__(model_config_dict["class"])
         model_inst = model_class(**model_config_dict["params"])
         config_dict["model"] = model_inst
+
+        if config_dict['criterion']:
+            config_dict['criterion'] = import_module("vesuvius.ann.criterions").__getattribute__(config_dict["criterion"])()
 
         opt_inst = import_module('vesuvius.ann.optimisers').__getattribute__(config_dict['optimizer_scheduler_cls'])
         config_dict['optimizer_scheduler_cls'] = opt_inst
@@ -70,7 +76,7 @@ width, height = 2045, 2048
 @dataclass
 class Configuration:
     info: str = ""
-    samples_max: int = 10_000
+    samples_max: int = 10_000_000
     volume_dataset_cls: Optional[Type[BaseDataset]] = None
     crop_box_cls: Optional[Type[BaseCropBox]] = None
     label_fn: Callable[..., Any] = None
@@ -99,7 +105,7 @@ class Configuration:
     seed: int = 648
     performance_dict: Optional[Dict[str, Any]] = None
     extra_dict: Optional[Dict[str, Any]] = None
-    _loops_per_epoch: int = field(init=False, default=10_000)
+    _loops_per_epoch: int = field(init=False, default=10_000_000)
     _epochs: int = field(init=False, default=1)
 
     def __post_init__(self, *args, **kwargs):

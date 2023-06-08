@@ -1,18 +1,21 @@
 import ctypes
+import gc
 import glob
 import itertools
 import json
 import os
+import re
 import shutil
 import tempfile
 import warnings
 from functools import lru_cache
 from os.path import join
 from pathlib import Path
-from typing import Any, Tuple
-from typing import Dict, Union, Literal
+from typing import Dict, Union, Literal, Iterable
+from typing import Tuple
 
 import dask
+import dask.multiprocessing
 import numpy as np
 import psutil
 import torch.nn as nn
@@ -20,11 +23,14 @@ import xarray as xr
 import zarr
 from dask.distributed import Client, LocalCluster
 from rasterio.errors import RasterioIOError
+from tqdm import tqdm
 from zarr.sync import ProcessSynchronizer
 
 from vesuvius.ann.transforms import *
 from vesuvius.config import Configuration
-from vesuvius.utils import normalise_images
+
+
+# from utils import voxel_stats
 
 
 def trim_memory() -> int:
@@ -32,38 +38,62 @@ def trim_memory() -> int:
     return libc.malloc_trim(0)
 
 
-def print_memory_usage():
+def memory_usage():
     memory = psutil.virtual_memory()
     print('Total Memory     :', round(memory.total / (1024.0 ** 3), 2), 'GB')
     print('Available Memory :', round(memory.available / (1024.0 ** 3), 2), 'GB')
     print('Used Memory      :', round(memory.used / (1024.0 ** 3), 2), 'GB')
     print('Memory Percentage:', memory.percent, '%')
+    return memory.available
 
 
-def read_tiffs(fragment: int, prefix: str) -> xr.Dataset:
+def extract_number(path):
+    filename = os.path.basename(path)
+    match = re.search(r'\d+', filename)
+    if match:
+        return int(match.group())
+    return None
+
+
+def read_tiffs(fragment: int, prefix: str) -> Iterable:
     fragment = str(fragment)
+
+    tiff_fnames = sorted(glob.glob(join(prefix, fragment, 'surface_volume/*.tif')))
+
     with warnings.catch_warnings():
         warnings.simplefilter("ignore")
-        tiff_fnames = sorted(glob.glob(join(prefix, fragment, 'surface_volume/*.tif')))
-        ds = xr.open_mfdataset(tiff_fnames, concat_dim='band', combine='nested', parallel=False).transpose('y', 'x',
-                                                                                                          'band')
+        mask = xr.open_dataset(join(prefix, fragment, "mask.png")).squeeze()['band_data']
+    mask = mask.astype(bool).load()
+    try:
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            labels_ink = xr.open_dataset(join(prefix, fragment, "inklabels.png")).squeeze()['band_data']
+        labels_ink = labels_ink.astype(bool).load()
+    except RasterioIOError:
+        labels_ink = None
+
+    for f in tiff_fnames:
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            ds = xr.open_dataset(f).transpose('y', 'x', 'band')
+
+        ds['z'] = [extract_number(f)]
+
         ds = ds.rename({'band_data': 'images'})
-        try:
-            labels_ink = xr.open_dataset(join(prefix, fragment, "inklabels.png")).squeeze()
-            ds['labels'] = labels_ink['band_data'].astype(bool)
-        except RasterioIOError:
-            pass
-        mask = xr.open_dataset(join(prefix, fragment, "mask.png")).squeeze()
-        ds['mask'] = mask['band_data'].astype(bool)
+        if labels_ink:
+            ds['labels'] = labels_ink
+        ds['mask'] = mask
         ds.mask.attrs = ''
-        ds = ds.rename({'band': 'z'})
+
         del ds['spatial_ref']
-        for v in ('x', 'y', 'z'):
+        for v in ('x', 'y'):
             ds[v] = np.arange(len(ds[v]))
-        return ds
+        del ds['band']
+        ds = ds.rename(band='z')
+        yield ds
 
 
-def encodings(variables) -> Dict[int, Dict[str, Any]]:
+def encodings(variables) -> Dict:
     compressor = {'compressor': zarr.Blosc(cname='zstd', clevel=5, shuffle=2)}
     return {k: compressor for k in variables}
 
@@ -88,68 +118,78 @@ def dataset_to_zarr(dataset: xr.Dataset, zarr_path: str, append_dim: str) -> Non
 def save_zarr(fragment: int, prefix: str, normalize=True) -> str:
     """Write a dataset to a zarr file"""
 
-    print_memory_usage()
+    # cd /data/kaggle/input/vesuvius-challenge-ink-detection
+    # rm -r */surface_volume.zarr  */data_cache_regular
+    zarr_path = join(prefix, str(fragment), 'surface_volume.zarr')
+
+    available_memory = memory_usage()
+    available_memory -= 1024 ** 3 / 4
+    cluster_memory = str(available_memory / (2 * (1024 ** 3))) + 'GB'
+    print(f'Cluster memory: {cluster_memory}')
 
     tmp_dir = '/data/tmp/'
     if os.path.exists(tmp_dir):
         dask.config.set({'temporary_directory': tmp_dir})
-    cluster = LocalCluster(processes=True, n_workers=1, threads_per_worker=1, memory_limit='7GB')
-    with Client(cluster) as client:
+    # cluster = LocalCluster(processes=True, n_workers=5, threads_per_worker=10, memory_limit=cluster_memory)
+    with Client() as client:
         print(client.dashboard_link)
 
-        print('reading ...')
-        dataset = read_tiffs(fragment, prefix)
-        client.run(trim_memory)
+        for dataset in tqdm(read_tiffs(fragment, prefix), total=65, postfix=f'Fragment {fragment} to Zarr'):
+            z = dataset.z.item()
 
-        zarr_path = join(prefix, str(fragment), 'surface_volume.zarr')
+            dataset = dataset.load()
+            dataset['images'] = dataset['images'].where(dataset.mask)
 
-        dataset = dataset.chunk({'x': 2048, 'y': 2048, 'z': 1})
-        dataset['images'] = dataset['images'].where(dataset.mask)
+            # Normalise w.r.t z
+            mean = dataset['images'].mean().compute()
+            std = dataset['images'].std().compute()
+            dataset['images'] = (dataset['images'] - mean) / std
+            dataset['images'].attrs['ds_z_mean'] = mean.values
+            dataset['images'].attrs['ds_z_std'] = std.values
 
-        print('Normalizing ..')
-        dataset['images'] = normalise_images(dataset['images']) if normalize else dataset['images']
-        # dataset['images'] = dataset['images']
-        client.run(trim_memory)
+            mode: Literal["w", "w-", "a", "r+", None]
+            if z == 0:
+                mode = 'w-'
+                append_dim = None
+                encodings_ = encodings(['images'])
+            else:
+                mode = 'a'
+                append_dim = 'z'
+                encodings_ = None
 
-        dataset['mask'] = dataset['mask'].astype(bool)
+            dataset_images = dataset[['images']]
+            dataset_images = dataset_images.chunk({'x': 128, 'y': 128})
+            dataset_images = client.scatter(dataset_images)
+            dataset_images = dask.persist(dataset_images)[0]
+            dataset_images.result().to_zarr(zarr_path,
+                                            mode=mode,
+                                            encoding=encodings_,
+                                            consolidated=True,
+                                            compute=True,
+                                            append_dim=append_dim)
+
+            client.run(trim_memory)
+
         if not ('labels' in dataset):
-            dataset['labels'] = xr.zeros_like(dataset['mask']).astype(bool)
+            dataset['labels'] = xr.zeros_like(dataset['mask'])
+        for v in tqdm(['labels', 'mask'], total=2, postfix=f'Writing labels and mask'):
+            print(v)
+            encodings_ = encodings([v])
+            ds = dataset[[v]].astype(bool)
+            ds = ds.chunk({'x': -1, 'y': -1})
+            ds = client.scatter(ds)
+            ds = dask.persist(ds)[0]
+            ds.result().to_zarr(zarr_path, mode='a', encoding=encodings_, consolidated=True, compute=True)
 
-        print('persist ...')
-        dataset = dataset.persist()
-        client.run(trim_memory)
+            client.run(trim_memory)
 
-        print('saving ...')
-        dataset = dataset.chunk({'x': 128, 'y': 128, 'z': 65})
-
-        dataset.to_zarr(zarr_path,
-                        mode='w',
-                        encoding=encodings(dataset.variables),
-                        consolidated=True,
-                        compute=True)
-        client.run(trim_memory)
     # cluster.close()
-    # client.close()
-
-        # z_chunk_size = 1
-        # for z in tqdm(range(0, len(dataset.z.values), z_chunk_size), desc=f'Writing fragment {fragment} to zarr',
-        #               position=1):
-        #     ds_sub = dataset.isel(z=slice(z, z + z_chunk_size)).chunk({'x': 128, 'y': 128, 'z': z_chunk_size})
-        #
-        #     mode: Literal["w", "w-", "a", "r+", None]
-        #     if z == 0:
-        #         mode, append_dim, encodings_ = 'w-', None, encodings(['images'])
-        #     else:
-        #         mode, append_dim, encodings_ = 'a', 'z', None
-        #
-        #     ds_sub.to_zarr(zarr_path, mode=mode, encoding=encodings_, consolidated=True, compute=True,
-        #                    append_dim=append_dim)
-        #     gc.collect()
+    client.close()
 
     return zarr_path
 
 
-def rechunk(ds: xr.Dataset, zarr_path):
+def rechunk_dataset(ds: xr.Dataset, zarr_path):
     print('Rechunking dataset ...')
     zarr_path = Path(zarr_path)
     with tempfile.TemporaryDirectory(dir=zarr_path.parent) as temp_dir:
@@ -166,7 +206,7 @@ def rechunk_org(ds, zarr_path):
     preferred_chunks = tuple(ds['images'].encoding['preferred_chunks'].values())
     chunks = ds['images'].encoding['chunks']
     if preferred_chunks != chunks:
-        rechunk(ds, zarr_path)
+        rechunk_dataset(ds, zarr_path)
 
 
 def read_dataset_from_zarr(fragment: Union[int, str], workers: int, prefix: str, normalize: bool = True) -> xr.Dataset:
@@ -251,7 +291,7 @@ def rechunk_cached(ds: xr.Dataset) -> xr.Dataset:
             del ds[var].encoding['preferred_chunks']
 
         # Save the rechunked dataset to a temporary Zarr file
-        rechunk(ds, zarr_path)
+        rechunk_dataset(ds, zarr_path)
 
     return xr.open_zarr(zarr_path, consolidated=True)
 
