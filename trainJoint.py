@@ -203,24 +203,24 @@ if __name__ == '__main__':
 
     TRAIN = True
     INFERENCE = True
-    STORED_CONFIG = False
+    STORED_CONFIG = True
 
-    EPOCHS = 10
+    EPOCHS = 3
     TOTAL_STEPS = 10_000_000
     SAVE_INTERVAL_MINUTES = 30
     VALIDATE_INTERVAL = 1_000
     LOG_INTERVAL = 250
     PRETRAINED_MODEL0 = True
     BOX_SUB_WIDTH_Z = 13
-    LEARNING_RATE = 0.03
+    LEARNING_RATE = 0.3
 
     save_interval_seconds = SAVE_INTERVAL_MINUTES * 60
 
     if STORED_CONFIG:
-        _config = Configuration.from_dict('output/runs/2023-06-05_20-47-56')
+        _config = Configuration.from_dict('output/runs/2023-06-08_16-45-30/')
         # assert _config.box_sub_width_z == BOX_SUB_WIDTH_Z
         config_model0 = _config.model0
-        config_model0.model.requires_grad = True
+        config_model0.model.requires_grad = False
         # config_model1 = _config.model1
         # config_model1.model.requires_grad = False
     else:

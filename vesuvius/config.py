@@ -58,7 +58,10 @@ class ConfigurationModel:
         config_dict["model"] = model_inst
 
         if config_dict['criterion']:
-            config_dict['criterion'] = import_module("vesuvius.ann.criterions").__getattribute__(config_dict["criterion"])()
+            try:
+                config_dict['criterion'] = import_module("vesuvius.ann.criterions").__getattribute__(config_dict["criterion"])()
+            except TypeError:
+                print('Failed to import criterion')
 
         opt_inst = import_module('vesuvius.ann.optimisers').__getattribute__(config_dict['optimizer_scheduler_cls'])
         config_dict['optimizer_scheduler_cls'] = opt_inst

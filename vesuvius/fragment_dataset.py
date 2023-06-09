@@ -203,46 +203,126 @@ class BaseDataset(ABC, Dataset):
 #         return self.length
 
 
+# class CachedDataset(Dataset):
+#     def __init__(self, dataset: xr.Dataset, transformers=None, group_size=32, use_cache=False):
+#         self.transformers = transformers
+#         self.group_size = group_size
+#         self.ds = dataset
+#         self.use_cache = use_cache
+#
+#         if self.use_cache:
+#             self.grp_all = self.get_group(dataset, group_size)
+#             self.sub_grp_size = 2**13
+#             self.reuse_counter = 0
+#             self.ds_sub = self.get_random_subset(self.ds)
+#             self.ds_grp = self.get_group(self.ds_sub, self.group_size)
+#         else:
+#             sample = self.ds['sample'].values
+#             np.random.shuffle(sample)
+#             self.ds['sample'] = ('sample', sample)
+#             self.ds = self.ds.isel(sample=slice(0, len(self.ds.sample) - len(self.ds.sample) % group_size))
+#             groups = xr.DataArray(np.arange(len(self.ds.sample)) // group_size, dims='sample')
+#             self.ds = self.ds.assign_coords(group=groups)
+#             self.ds_grp = self.ds.groupby('group')
+#             self.indexes = list(range(len(self.ds_grp)))
+#             random.shuffle(self.indexes)
+#
+#     def get_random_subset(self, ds) -> xr.Dataset:
+#         sample = ds['sample'].values
+#         np.random.shuffle(sample)
+#         ds['sample'] = ('sample', sample)
+#         ds = ds.sortby('sample')
+#         ds = ds.isel(sample=slice(0, self.sub_grp_size))
+#         return ds.load()
+#
+#     @staticmethod
+#     def get_group(ds, group_size):
+#         groups = xr.DataArray(np.arange(len(ds.sample)) // group_size, dims='sample')
+#         ds = ds.assign_coords(group=groups)
+#         return ds.groupby('group')
+#
+#     def __getitem__(self, index: int) -> DatapointTuple:
+#         if self.use_cache:
+#             if index % (self.sub_grp_size // self.group_size) == 0:
+#                 self.reuse_counter += 1
+#                 if self.reuse_counter >= 10:
+#                     self.reuse_counter = 0
+#                     del self.ds_sub
+#                     del self.ds_grp
+#                     self.ds_sub = self.get_random_subset(self.ds)
+#                     self.ds_grp = self.get_group(self.ds_sub, self.group_size)
+#             ds = self.ds_grp[index % len(self.ds_grp)]  # Use shuffled index
+#         else:
+#             if index >= self.__len__():
+#                 raise IndexError("Dataset exhausted")
+#             ds = self.ds_grp[self.indexes[index]]  # Use shuffled index
+#
+#         dp = Datapoint(ds['voxels'],
+#                        ds['label'],
+#                        ds['fragment'],
+#                        ds['x_start'],
+#                        ds['x_stop'],
+#                        ds['y_start'],
+#                        ds['y_stop'],
+#                        ds['z_start'],
+#                        ds['z_stop']).to_namedtuple()
+#
+#         if self.transformers:
+#             dp = dp._replace(voxels=self.transformers(dp.voxels))
+#         return dp
+#
+#     def __len__(self):
+#         return len(self.grp_all) if self.use_cache else len(self.ds_grp)
+
+
+def gaussian(x, mu, sigma):
+    y = np.exp(-(x - mu)**2 / (2 * sigma**2))
+    return y / np.sum(y)
+
+
 class CachedDataset(Dataset):
-    def __init__(self, dataset: xr.Dataset, transformers=None, group_size=32):
+    def __init__(self, dataset: xr.Dataset, transformers=None, group_size=32, use_cache=True):
         self.transformers = transformers
         self.group_size = group_size
-        self.grp_all = self.get_group(dataset, group_size)
-        self.ds = dataset
 
-        self.sub_grp_size = 2**13
-        self.reuse_counter = 0
+        self.ds_all = dataset
+        self.ds_all['sample'] = np.arange(len(self.ds_all['sample']))
 
-        # Initialize subset and group
-        self.ds_sub = self.get_random_subset(self.ds)
-        self.ds_grp = self.get_group(self.ds_sub, self.group_size)
+        self.use_cache = use_cache
+        self.ds_grp = None
+
+        if use_cache:
+            self.sigma = 1
+        else:
+            self.ds = dataset.sortby('sample')
+            self.ds = self.ds.isel(sample=slice(0, len(self.ds.sample) - len(self.ds.sample) % group_size))
+
+    @property
+    def sigma(self):
+        return self._sigma
+
+    @sigma.setter
+    def sigma(self, value):
+        self._sigma = value
+        if self.use_cache:
+            try:
+                del self.ds
+            except AttributeError:
+                pass
+            self.ds = self.get_random_subset(self.ds_all)
 
     def get_random_subset(self, ds) -> xr.Dataset:
-        sample = ds['sample'].values
-        np.random.shuffle(sample)
-        ds['sample'] = ('sample', sample)
-        ds = ds.sortby('sample')
-        ds = ds.isel(sample=slice(0, self.sub_grp_size))
-        return ds.load()
-
-    @staticmethod
-    def get_group(ds, group_size):
-        groups = xr.DataArray(np.arange(len(ds.sample)) // group_size, dims='sample')
-        ds = ds.assign_coords(group=groups)
-        return ds.groupby('group')
+        choices = np.random.choice(ds.sample.values, size=2 ** 13,
+                                   p=gaussian(ds.z_start.values, 32, self._sigma))
+        ds = ds.isel(sample=choices).compute()
+        return ds
 
     def __getitem__(self, index: int) -> DatapointTuple:
-        if index % (self.sub_grp_size // self.group_size) == 0:
-            self.reuse_counter += 1
-            if self.reuse_counter >= 10:
-                self.reuse_counter = 0
-                del self.ds_sub
-                del self.ds_grp
-                self.ds_sub = self.get_random_subset(self.ds)
-                self.ds_grp = self.get_group(self.ds_sub, self.group_size)
-            else:
-                pass
-        ds = self.ds_grp[index % len(self.ds_grp)]  # Use shuffled index
+        if index >= self.__len__():
+            raise IndexError("Dataset exhausted")
+        choices = np.random.choice(np.arange(len(self.ds.sample.values)), size=self.group_size)
+        ds = self.ds.isel(sample=choices)
+
         dp = Datapoint(ds['voxels'],
                        ds['label'],
                        ds['fragment'],
@@ -258,4 +338,4 @@ class CachedDataset(Dataset):
         return dp
 
     def __len__(self):
-        return len(self.grp_all)
+        return len(self.ds_all.sample) // self.group_size

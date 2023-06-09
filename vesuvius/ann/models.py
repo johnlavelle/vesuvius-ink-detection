@@ -380,7 +380,7 @@ class CNNWithAttention(nn.Module):
 
 
 class StackingClassifierShallow(nn.Module):
-    def __init__(self, input_size: int, width_multiplier: int = 1):
+    def __init__(self, input_size: int, width_multiplier: int = 4):
         super().__init__()
         self.input_size = input_size
         self.width_multiplier = width_multiplier

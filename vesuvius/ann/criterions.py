@@ -2,6 +2,8 @@ import torch
 from torch import nn as nn
 from torch.nn import functional as F
 from torch.nn import *
+from torch.nn.functional import binary_cross_entropy_with_logits
+
 
 
 class FocalLoss(nn.Module):
