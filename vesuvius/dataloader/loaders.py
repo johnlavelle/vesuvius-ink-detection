@@ -105,7 +105,7 @@ def cached_data_loader(cfg: Configuration, reset_cache: bool = False, val_data=F
         create_dataset(cache_dir, cfg, worker_init, zarr_dir)
 
     ds = get_dataset(zarr_dir, fragment=cfg.test_box_fragment, hold_back_box=cfg.test_box, test_data=val_data)
-    return CachedDataset(ds, transformers=cfg.transformers, group_size=cfg.batch_size)
+    return CachedDataset(ds, transformers=cfg.transformers, group_size=cfg.batch_size, in_memory=cfg.in_memory_dataset)
 
 
 def get_train_dataset(cfg: Configuration,

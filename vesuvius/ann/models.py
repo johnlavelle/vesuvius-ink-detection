@@ -19,7 +19,7 @@ class CNN1(nn.Module):
         self.fc2 = nn.LazyLinear(1)
         self.sigmoid = nn.Sigmoid()
 
-    def forward(self, x: torch.Tensor):
+    def forward(self, x: torch.Tensor, dummy):
         x = self.pool1(self.conv1(x))
         x = self.pool2(self.conv2(x))
         x = self.pool3(self.conv3(x))
@@ -29,19 +29,217 @@ class CNN1(nn.Module):
         return x
 
 
-def cnn1_sequential():
-    return nn.Sequential(
-        nn.Conv3d(1, 16, 3, 1, 1),
-        nn.MaxPool3d(2, 2),
-        nn.Conv3d(16, 32, 3, 1, 1),
-        nn.MaxPool3d(2, 2),
-        nn.Conv3d(32, 64, 3, 1, 1),
-        nn.MaxPool3d(2, 2),
-        nn.Flatten(start_dim=1),
-        nn.LazyLinear(128),
-        nn.ReLU(),
-        nn.LazyLinear(1),
-        nn.Sigmoid())
+class EncoderDecoderSequential(torch.nn.Module):
+    def __init__(self, dropout_rate=0.4):
+        super().__init__()
+
+        self.dropout_rate = dropout_rate
+
+        filters = [16, 32, 64]
+        paddings = [1, 1, 1]
+        kernel_sizes = [3, 3, 3]
+        strides = [2, 2, 2]
+
+        layers = []
+        in_channels = 1
+        for num_filters, padding, kernel_size, stride in zip(filters, paddings, kernel_sizes, strides):
+            layers.extend([
+                nn.Conv3d(
+                    in_channels=in_channels,
+                    out_channels=num_filters,
+                    kernel_size=kernel_size,
+                    stride=stride,
+                    padding=padding,
+                ),
+                nn.ReLU(inplace=True),
+                torch.nn.BatchNorm3d(num_features=num_filters),
+                nn.Dropout(self.dropout_rate)
+            ])
+            in_channels = num_filters
+        layers.append(nn.AdaptiveAvgPool3d(1))
+        layers.append(nn.Flatten())
+
+        self.encoder = nn.Sequential(*layers)
+        self.decoder = nn.Sequential(
+            nn.Linear(in_channels, 128),
+            nn.ReLU(inplace=True),
+            nn.Dropout(self.dropout_rate),
+            nn.Linear(128, 128),
+            nn.ReLU(inplace=True),
+            nn.Dropout(self.dropout_rate),
+            nn.Linear(128, 1)
+        )
+
+        # self.fc_combined2 = nn.Linear(3, 1)
+
+    def forward(self, x, dummy):
+        features = self.encoder(x)
+        return self.decoder(features)
+
+    def as_dict(self):
+        return {}
+
+
+class EncoderDecoder(torch.nn.Module):
+    def __init__(self, dropout_rate=0.4):
+        super().__init__()
+
+        self.dropout_rate = dropout_rate
+
+        filters = [16, 32, 64]
+        paddings = [1, 1, 1]
+        kernel_sizes = [3, 3, 3]
+        strides = [2, 2, 2]
+
+        self.convs = []
+        self.relus = []
+        self.bns = []
+        self.dropouts = []
+        in_channels = 1
+        for i, (num_filters, padding, kernel_size, stride) in enumerate(zip(filters, paddings, kernel_sizes, strides)):
+            conv = nn.Conv3d(
+                in_channels=in_channels,
+                out_channels=num_filters,
+                kernel_size=kernel_size,
+                stride=stride,
+                padding=padding,
+            )
+            relu = nn.ReLU(inplace=True)
+            bn = torch.nn.BatchNorm3d(num_features=num_filters)
+            dropout = nn.Dropout(self.dropout_rate)
+            setattr(self, f"conv_{i}", conv)
+            setattr(self, f"relu_{i}", relu)
+            setattr(self, f"bn_{i}", bn)
+            setattr(self, f"dropout_{i}", dropout)
+            self.convs.append(conv)
+            self.relus.append(relu)
+            self.bns.append(bn)
+            self.dropouts.append(dropout)
+            in_channels = num_filters
+        self.pool = nn.AdaptiveAvgPool3d(1)
+        self.flatten = nn.Flatten()
+
+        self.fc1 = nn.Linear(in_channels, 32)
+        self.relu_fc1 = nn.ReLU(inplace=True)
+        self.dropout_fc1 = nn.Dropout(self.dropout_rate)
+        self.fc2 = nn.Linear(32, 32)
+        self.relu_fc2 = nn.ReLU(inplace=True)
+        self.dropout_fc2 = nn.Dropout(self.dropout_rate)
+        self.fc3 = nn.Linear(32, 1)
+
+    def forward(self, x, dummy):
+        for conv, relu, bn, dropout in zip(self.convs, self.relus, self.bns, self.dropouts):
+            x = conv(x)
+            x = relu(x)
+            x = bn(x)
+            x = self.pool(x)
+            x = dropout(x)
+        x = self.flatten(x)
+
+        x = self.fc1(x)
+        x = self.relu_fc1(x)
+        x = self.dropout_fc1(x)
+        x = self.fc2(x)
+        x = self.relu_fc2(x)
+        x = self.dropout_fc2(x)
+        x = self.fc3(x)
+
+        return x
+
+    def as_dict(self):
+        return {}
+
+
+import torch
+from torch import nn
+
+
+def gaussian(x, mu, sigma):
+    y = torch.exp(-(x - mu) ** 2 / (2 * sigma ** 2))
+    return y / torch.sum(y)
+
+
+class EncoderDecoderZ(torch.nn.Module):
+    def __init__(self, dropout_rate=0.4):
+        super().__init__()
+
+        cnn_width = 128
+
+        # filters = [8, 16, 32]
+        filters = [16, 32, 64]
+        paddings = [1, 1, 1]
+        kernel_sizes = [3, 3, 3]
+        strides = [2, 2, 2]
+        dropout_ratea = [dropout_rate, dropout_rate, dropout_rate]
+        self.dropout_rate = 0.2
+
+        self.convs = nn.ModuleList()
+        self.relus = nn.ModuleList()
+        self.bns = nn.ModuleList()
+        self.dropouts = nn.ModuleList()
+        in_channels = 1
+        for i, (num_filters, padding, kernel_size, stride, dropout_rate) in \
+                enumerate(zip(filters, paddings, kernel_sizes, strides, dropout_ratea)):
+            conv = nn.Conv3d(
+                in_channels=in_channels,
+                out_channels=num_filters,
+                kernel_size=kernel_size,
+                stride=stride,
+                padding=padding,
+            )
+            relu = nn.ReLU(inplace=True)
+            bn = torch.nn.BatchNorm3d(num_features=num_filters)
+            dropout = nn.Dropout(dropout_rate)
+
+            self.convs.append(conv)
+            self.relus.append(relu)
+            self.bns.append(bn)
+            self.dropouts.append(dropout)
+
+            in_channels = num_filters
+
+        self.pool = nn.AdaptiveAvgPool3d(1)
+        self.flatten = nn.Flatten()
+
+        self.fc1 = nn.Linear(in_channels, cnn_width)
+        self.relu_fc1 = nn.ReLU(inplace=True)
+        self.dropout_fc1 = nn.Dropout(self.dropout_rate)
+        self.fc2 = nn.Linear(cnn_width, cnn_width)
+        self.relu_fc2 = nn.ReLU(inplace=True)
+        self.dropout_fc2 = nn.Dropout(self.dropout_rate)
+        self.fc3 = nn.Linear(cnn_width, 1)
+
+    def forward(self, x, scalar):
+        scalar += 0.001
+        # scalar -= 0.5
+        # scalar *= 2
+        # scalar = gaussian(scalar, 0, 0.4)
+
+        for conv, relu, bn, dropout in zip(self.convs, self.relus, self.bns, self.dropouts):
+            x = conv(x)
+            x = relu(x)
+            x = bn(x)
+            x = self.pool(x)
+            x = dropout(x)
+
+            # Condition the output of each layer by scaling it with the scalar
+            # Here, we need to reshape the scalar to match the shape of x
+            scalar = scalar.view(-1, 1, 1, 1, 1)
+            x = x * scalar
+
+        x = self.flatten(x)
+        x = self.fc1(x)
+        x = self.relu_fc1(x)
+        x = self.dropout_fc1(x)
+        x = self.fc2(x)
+        x = self.relu_fc2(x)
+        # x = self.dropout_fc2(x)
+        # x = self.fc3(x)
+
+        return x
+
+    def as_dict(self):
+        return {}
 
 
 class HybridBinaryClassifier(nn.Module):
@@ -67,15 +265,15 @@ class HybridBinaryClassifier(nn.Module):
 
         self.flatten = nn.Flatten(start_dim=1)
 
-        self.linear1 = nn.Linear(1024, 4)
+        self.linear1 = nn.Linear(784, 2)
 
         # FCN part for scalar input
-        self.fc_scalar = nn.Linear(1, 2)
+        # self.fc_scalar = nn.Linear(1, 2)
         # self.bn_scalar = nn.BatchNorm1d(4)
         # self.dropout_scalar = nn.Dropout(self.dropout_rate)
 
         # Combined layers (initialized later)
-        self.fc_combined1 = nn.Linear(5, 3)
+        self.fc_combined1 = nn.Linear(3, 3)
         # self.bn_combined1 = nn.BatchNorm1d(4)
 
         self.fc_combined2 = nn.Linear(3, 1)
@@ -91,15 +289,21 @@ class HybridBinaryClassifier(nn.Module):
         scalar_input *= 2
 
         # CNN part
-        x = F.relu(self.bn1(self.conv1(x)))
+        x = self.conv1(x)
+        x = self.bn1(x)
+        x = F.relu(x)
         x = self.pool1(x)
         x = self.dropout1(x)
 
-        x = F.relu(self.bn2(self.conv2(x)))
+        x = self.conv2(x)
+        x = self.bn2(x)
+        x = F.relu(x)
         x = self.pool2(x)
         x = self.dropout2(x)
 
-        x = F.relu(self.bn3(self.conv3(x)))
+        x = self.conv3(x)
+        x = self.bn3(x)
+        x = F.relu(x)
         x = self.pool3(x)
         x = self.dropout3(x)
 
@@ -128,7 +332,7 @@ class HybridBinaryClassifier(nn.Module):
         # x = self.dropout_combined(x)
         # x = self.fc_combined3(x)
 
-        return self.sigmoid(x)
+        return x
 
     @property
     def requires_grad(self):
@@ -144,6 +348,21 @@ class HybridBinaryClassifier(nn.Module):
             'dropout_rate': self.dropout_rate,
             'width': self.width
         }
+
+
+def cnn1_sequential():
+    return nn.Sequential(
+        nn.Conv3d(1, 16, 3, 1, 1),
+        nn.MaxPool3d(2, 2),
+        nn.Conv3d(16, 32, 3, 1, 1),
+        nn.MaxPool3d(2, 2),
+        nn.Conv3d(32, 64, 3, 1, 1),
+        nn.MaxPool3d(2, 2),
+        nn.Flatten(start_dim=1),
+        nn.LazyLinear(128),
+        nn.ReLU(),
+        nn.LazyLinear(1),
+        nn.Sigmoid())
 
 
 # class HybridBinaryClassifierShallow(nn.Module):
@@ -380,22 +599,57 @@ class CNNWithAttention(nn.Module):
 
 
 class StackingClassifierShallow(nn.Module):
-    def __init__(self, input_size: int, width_multiplier: int = 4):
+    def __init__(self, input_size: int, width: int = 4, dropout_rate=0.0):
         super().__init__()
+        self.dropout_rate = dropout_rate
+        self.dropout1 = nn.Dropout(self.dropout_rate)
         self.input_size = input_size
-        self.width_multiplier = width_multiplier
-        self.fc1 = nn.Linear(input_size, 3 * self.width_multiplier)
-        self.fc2 = nn.Linear(3 * self.width_multiplier, 1)
+        self.width = width
+        self.fc1 = nn.Linear(input_size, self.width)
+        self.fc2 = nn.Linear(self.width, 1)
+        self.dropout2 = nn.Dropout(self.dropout_rate)
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
+        x = self.dropout1(x)
         x = self.fc1(x)
         x = torch.relu(x)
+        x = self.dropout2(x)
         x = self.fc2(x)
-        x = torch.sigmoid(x)
         return x
 
     def as_dict(self):
         return {
             'input_size': self.input_size,
-            'width_multiplier': self.width_multiplier
+            'width_multiplier': self.width
         }
+
+
+class StackingMax(nn.Module):
+    def __init__(self):
+        super().__init__()
+
+    @staticmethod
+    def forward(x: torch.Tensor) -> torch.Tensor:
+        return torch.max(x)
+
+    @staticmethod
+    def as_dict():
+        return {}
+
+
+class SimpleModel(nn.Module):
+    def __init__(self, input_size, output_size, dropout_rate=0.0):
+        super(SimpleModel, self).__init__()
+        self.linear1 = nn.Linear(input_size, 5)
+        self.dropout = nn.Dropout(dropout_rate)
+        self.linear2 = nn.Linear(5, 1)
+        self.max_pool1 = nn.MaxPool1d(3)
+
+    def forward(self, x):
+        # x = self.max_pool1(x)
+        x = self.linear1(x)
+        x = self.dropout(x)
+        x = torch.relu(x)
+        x = self.linear2(x)
+        # x = torch.relu(x)
+        return x

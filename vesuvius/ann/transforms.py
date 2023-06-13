@@ -17,6 +17,11 @@ class RandomFlipTransform(Module):
         return tensor
 
 
+class IdentityTransform:
+    def __call__(self, x):
+        return x
+
+
 class NormalizeVolume(Module):
 
     @staticmethod
@@ -24,12 +29,19 @@ class NormalizeVolume(Module):
         return (volume - volume.mean()) / volume.std()
 
 
+# transform_train = transforms.Compose([
+#     RandomFlipTransform(p_lr=0.5, p_ud=0.5)
+#     # NormalizeVolume()
+# ])
+
+
 transform_train = transforms.Compose([
     RandomFlipTransform(p_lr=0.5, p_ud=0.5),
-    NormalizeVolume()
+    # NormalizeVolume()
 ])
 
 
 transform_val = transforms.Compose([
-    NormalizeVolume()
+    IdentityTransform(),
+    # NormalizeVolume()
 ])

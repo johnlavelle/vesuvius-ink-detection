@@ -140,7 +140,7 @@ def save_zarr(fragment: int, prefix: str, normalize=True) -> str:
             dataset = dataset.load()
             dataset['images'] = dataset['images'].where(dataset.mask)
 
-            # Normalise w.r.t z
+            # # Normalise w.r.t z
             mean = dataset['images'].mean().compute()
             std = dataset['images'].std().compute()
             dataset['images'] = (dataset['images'] - mean) / std

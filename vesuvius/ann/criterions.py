@@ -40,3 +40,9 @@ class FocalLoss(nn.Module):
 
     def __str__(self):
         return f'FocalLoss(alpha={self.alpha}, gamma={self.gamma}, reduction={self.reduction})'
+
+    def as_dict(self):
+        return {'type': 'FocalLoss',
+                'alpha': self.alpha,
+                'gamma': self.gamma,
+                'reduction': self.reduction}

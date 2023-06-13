@@ -280,22 +280,64 @@ def gaussian(x, mu, sigma):
     return y / np.sum(y)
 
 
+class DatasetReader:
+    def __init__(self, ds, chunk_size):
+        self.ds = ds
+        self.chunk_size = chunk_size
+        self.num_samples = len(ds.sample)
+        self.num_chunks = np.ceil(self.num_samples / self.chunk_size).astype(int)
+        self.current_chunk_idx = 0
+        self.current_chunk = None
+        self.__getitem__(0)
+
+    def _get_chunk(self, chunk_idx):
+        start = chunk_idx * self.chunk_size
+        end = min((chunk_idx + 1) * self.chunk_size, self.num_samples)
+        return self.ds.sel(sample=slice(start, end)).load()
+
+    def __getitem__(self, sample_idx):
+        chunk_idx = sample_idx // self.chunk_size
+        if self.current_chunk is None or chunk_idx != self.current_chunk_idx:
+            del self.current_chunk
+            self.current_chunk = self._get_chunk(chunk_idx)
+            self.current_chunk_idx = chunk_idx
+        return self.current_chunk.sel(sample=sample_idx)
+
+    def get_random_samples(self, number_of_samples):
+        if self.current_chunk is None:
+            raise ValueError("No chunk is currently loaded.")
+        sample_indices = random.sample(range(len(self.current_chunk.sample)), number_of_samples)
+        return self.current_chunk.isel(sample=sample_indices)
+
+
 class CachedDataset(Dataset):
-    def __init__(self, dataset: xr.Dataset, transformers=None, group_size=32, use_cache=True):
+    def __init__(self, dataset: xr.Dataset, transformers=None, group_size=32, in_memory=True):
         self.transformers = transformers
         self.group_size = group_size
+
+        # dataset = dataset.isel(sample=slice(0, None, 2)).load()
 
         self.ds_all = dataset
         self.ds_all['sample'] = np.arange(len(self.ds_all['sample']))
 
-        self.use_cache = use_cache
+        self.randomise_ds()
+        self.ds_reader = DatasetReader(self.ds_all, 256)
+
+        self.in_memory = in_memory
         self.ds_grp = None
 
-        if use_cache:
-            self.sigma = 1
-        else:
-            self.ds = dataset.sortby('sample')
-            self.ds = self.ds.isel(sample=slice(0, len(self.ds.sample) - len(self.ds.sample) % group_size))
+        # if in_memory:
+        #     self.sigma = 1
+        # else:
+        #     # self.ds = dataset.sortby('sample')
+        #     self.ds = self.ds_all.isel(sample=slice(0, len(self.ds_all.sample) - len(self.ds_all.sample) % group_size))
+
+    def randomise_ds(self):
+        samples = np.arange(len(self.ds_all['sample']))
+        np.random.shuffle(samples)
+        # Reassign the shuffled coordinates to the 'sample' dimension
+        self.ds_all = self.ds_all.assign_coords(sample=samples)
+        self.ds_all = self.ds_all.sortby('sample')
 
     @property
     def sigma(self):
@@ -304,7 +346,7 @@ class CachedDataset(Dataset):
     @sigma.setter
     def sigma(self, value):
         self._sigma = value
-        if self.use_cache:
+        if self.in_memory:
             try:
                 del self.ds
             except AttributeError:
@@ -314,14 +356,18 @@ class CachedDataset(Dataset):
     def get_random_subset(self, ds) -> xr.Dataset:
         choices = np.random.choice(ds.sample.values, size=2 ** 13,
                                    p=gaussian(ds.z_start.values, 32, self._sigma))
-        ds = ds.isel(sample=choices).compute()
+        ds = self.ds_all.isel(sample=choices).compute()
+
         return ds
 
     def __getitem__(self, index: int) -> DatapointTuple:
+        if index == self.__len__() - 1:
+            self.randomise_ds()
         if index >= self.__len__():
             raise IndexError("Dataset exhausted")
-        choices = np.random.choice(np.arange(len(self.ds.sample.values)), size=self.group_size)
-        ds = self.ds.isel(sample=choices)
+        # choices = np.random.choice(np.arange(len(self.ds.sample.values)), size=self.group_size, replace=False)
+        # ds = self.ds.isel(sample=choices)
+        ds = self.ds_reader.get_random_samples(self.group_size)
 
         dp = Datapoint(ds['voxels'],
                        ds['label'],

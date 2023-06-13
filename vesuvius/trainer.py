@@ -59,7 +59,9 @@ class BaseTrainer(ABC):
         self.train_loader_iter = chain.from_iterable(repeat(self.train_dataset, self.config.epochs))
         return islice(self.train_loader_iter, self.total_loops)
 
-    def get_val_loader_iter(self) -> Iterable:
+    def get_val_loader_iter(self, sigma=None) -> Iterable:
+        if sigma:
+            self.val_dataset.sigma = sigma
         loops = min(len(self.val_dataset), self.config.validation_steps)
         return list(islice(self.val_dataset, loops))
 

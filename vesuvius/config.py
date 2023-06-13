@@ -106,6 +106,7 @@ class Configuration:
     epochs: int = 1
     accumulation_steps: int = None
     seed: int = 648
+    in_memory_dataset: bool = False
     performance_dict: Optional[Dict[str, Any]] = None
     extra_dict: Optional[Dict[str, Any]] = None
     _loops_per_epoch: int = field(init=False, default=10_000_000)
